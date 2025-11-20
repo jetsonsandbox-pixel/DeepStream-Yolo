@@ -21,6 +21,11 @@
 #
 # Edited by Marcos Luciano
 # https://www.github.com/marcoslucianops
+#
+# Extended with tiled inference support (2025)
+# - nvdsinfer_tiled_config.h: Tile configuration structures
+# - nvdsinfer_tiled_preprocessor.cu: CUDA kernels for tile extraction
+# - nvdsinfer_tiled_postprocessor.cpp: NMS merging and coordinate transformation
 ################################################################################
 
 CUDA_VER?=
