@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Output files
+output*.mp4
+output*.avi
+screenshot_*.jpg
+*.log
+
+# TensorRT
+*.engine
+*.plan
+
+# Test data (exclude large test videos)
+test-data/
+*.MOV
+*.mov
+*.mp4
+*.avi
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Compiled objects
+*.o
+*.a
+libnvdsinfer_custom_impl_Yolo.so
+
+# Temporary
+tmp/
+temp/
