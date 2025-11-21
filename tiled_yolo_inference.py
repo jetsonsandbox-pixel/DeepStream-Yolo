@@ -7,6 +7,7 @@ Combines:
 - Proven tile extraction from umbrella-jetson-dev/gstreamer_yolo_tracker.py
 - Native TensorRT inference from DeepStream-YOLO
 - NMS merging from our custom C++ library
+- ByteTrack object tracking for consistent IDs across frames
 
 This gives native Jetson performance while maintaining working tiling logic.
 
@@ -14,21 +15,30 @@ Architecture:
 1. Extract 8 tiles (640x640) from 1920x1080 frame [Python]
 2. Run TensorRT inference on each tile [PyCUDA + TensorRT]
 3. Merge detections with NMS [C++ library via ctypes]
-4. Output final detections in frame coordinates
+4. Track objects across frames with ByteTrack [Optional]
+5. Output final detections in frame coordinates with track IDs
 
 Based on:
 - /home/jet-nx8/Sandbox/umbrella-jetson-dev/gstreamer_yolo_tracker.py (lines 2200-2396)
 - /home/jet-nx8/DeepStream-YOLO (TensorRT engine and NMS library)
+- ultralytics/trackers/byte_tracker.py (ByteTrack implementation)
 """
 
 import numpy as np
 import cv2
 import tensorrt as trt
 import torch
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional
 import time
 import ctypes
 from dataclasses import dataclass
+from pathlib import Path
+import sys
+
+# Add ultralytics to path for ByteTracker
+ULTRALYTICS_PATH = Path("/home/jet-nx8/ultralytics")
+if ULTRALYTICS_PATH.exists() and str(ULTRALYTICS_PATH) not in sys.path:
+    sys.path.insert(0, str(ULTRALYTICS_PATH))
 
 # Use PyTorch for GPU memory management (no PyCUDA needed!)
 # PyTorch is already installed and works perfectly with TensorRT
@@ -651,26 +661,143 @@ class DetectionMerger:
 
 
 # ============================================================================
+# BYTETRACK OBJECT TRACKING
+# ============================================================================
+
+class SimpleTracker:
+    """
+    Lightweight ByteTrack wrapper for tiled YOLO inference
+    
+    Provides consistent track IDs across frames for detected objects.
+    Based on ultralytics ByteTracker with simplified interface.
+    """
+    
+    def __init__(self, track_thresh: float = 0.25, track_buffer: int = 30, match_thresh: float = 0.8):
+        """
+        Initialize ByteTrack tracker
+        
+        Args:
+            track_thresh: Detection confidence threshold for tracking
+            track_buffer: Number of frames to keep lost tracks
+            match_thresh: IoU threshold for matching tracks to detections
+        """
+        try:
+            from ultralytics.trackers.byte_tracker import BYTETracker
+            from types import SimpleNamespace
+            
+            # Create args namespace for BYTETracker
+            args = SimpleNamespace()
+            args.track_high_thresh = track_thresh
+            args.track_low_thresh = 0.1
+            args.new_track_thresh = track_thresh + 0.1
+            args.track_buffer = track_buffer
+            args.match_thresh = match_thresh
+            args.fuse_score = False
+            
+            self.tracker = BYTETracker(args, frame_rate=30)
+            self.enabled = True
+            print(f"[SimpleTracker] ByteTrack initialized (track_thresh={track_thresh}, buffer={track_buffer})")
+            
+        except ImportError as e:
+            print(f"[SimpleTracker] Failed to import ByteTracker: {e}")
+            print(f"[SimpleTracker] Tracking disabled - detections will not have track IDs")
+            self.enabled = False
+            self.tracker = None
+    
+    def update(self, detections: np.ndarray) -> np.ndarray:
+        """
+        Update tracker with new detections
+        
+        Args:
+            detections: Array (N, 6) [x1, y1, x2, y2, conf, class_id]
+            
+        Returns:
+            Tracked detections (N, 7) [x1, y1, x2, y2, conf, class_id, track_id]
+        """
+        if not self.enabled or len(detections) == 0:
+            # No tracking - return original detections with track_id=-1
+            if len(detections) == 0:
+                return detections
+            track_ids = np.full((len(detections), 1), -1, dtype=np.float32)
+            return np.hstack([detections, track_ids])
+        
+        try:
+            # Convert to SimpleNamespace format expected by ByteTracker
+            from types import SimpleNamespace
+            
+            results = SimpleNamespace()
+            results.xyxy = detections[:, :4]  # Bounding boxes
+            results.conf = detections[:, 4]   # Confidences
+            results.cls = detections[:, 5]    # Class IDs
+            
+            # Convert to xywh format for ByteTracker
+            boxes_xywh = np.zeros_like(results.xyxy)
+            boxes_xywh[:, 0] = (results.xyxy[:, 0] + results.xyxy[:, 2]) / 2  # center x
+            boxes_xywh[:, 1] = (results.xyxy[:, 1] + results.xyxy[:, 3]) / 2  # center y
+            boxes_xywh[:, 2] = results.xyxy[:, 2] - results.xyxy[:, 0]        # width
+            boxes_xywh[:, 3] = results.xyxy[:, 3] - results.xyxy[:, 1]        # height
+            results.xywh = boxes_xywh
+            
+            # Run ByteTracker update
+            tracked = self.tracker.update(results)
+            
+            if len(tracked) == 0:
+                # No tracks - return original detections with track_id=-1
+                track_ids = np.full((len(detections), 1), -1, dtype=np.float32)
+                return np.hstack([detections, track_ids])
+            
+            # tracked is array (N, 7): [x1, y1, x2, y2, track_id, conf, class_id]
+            # Reorder to match our format: [x1, y1, x2, y2, conf, class_id, track_id]
+            tracked_output = np.zeros((len(tracked), 7), dtype=np.float32)
+            tracked_output[:, :4] = tracked[:, :4]      # x1, y1, x2, y2
+            tracked_output[:, 4] = tracked[:, 5]        # conf
+            tracked_output[:, 5] = tracked[:, 6]        # class_id
+            tracked_output[:, 6] = tracked[:, 4]        # track_id
+            
+            return tracked_output
+            
+        except Exception as e:
+            print(f"[SimpleTracker] Tracking error: {e}")
+            # Fallback - return detections without tracking
+            track_ids = np.full((len(detections), 1), -1, dtype=np.float32)
+            return np.hstack([detections, track_ids])
+    
+    def reset(self):
+        """Reset tracker state"""
+        if self.enabled and self.tracker is not None:
+            self.tracker.reset()
+            print(f"[SimpleTracker] Tracker reset")
+
+
+# ============================================================================
 # MAIN PIPELINE
 # ============================================================================
 
 class TiledYOLOInference:
-    """Complete tiled inference pipeline"""
+    """Complete tiled inference pipeline with optional object tracking"""
     
-    def __init__(self, engine_path: str, config: TileConfig = None):
+    def __init__(self, engine_path: str, config: TileConfig = None, enable_tracking: bool = False):
         """
         Initialize tiled inference pipeline
         
         Args:
             engine_path: Path to TensorRT engine
             config: Tile configuration (default: 1920x1080 → 640x640)
+            enable_tracking: Enable ByteTrack object tracking across frames
         """
         self.config = config or TileConfig()
         self.tile_extractor = TileExtractor(self.config)
         self.inference_engine = TensorRTInference(engine_path)
         self.detection_merger = DetectionMerger()
         
-        print("[TiledYOLOInference] Pipeline initialized")
+        # Initialize object tracker (optional)
+        self.enable_tracking = enable_tracking
+        if enable_tracking:
+            self.tracker = SimpleTracker(track_thresh=0.25, track_buffer=30, match_thresh=0.8)
+        else:
+            self.tracker = None
+        
+        print(f"[TiledYOLOInference] Pipeline initialized (tracking={'ON' if enable_tracking else 'OFF'})")
     
     def process_frame(self, frame: np.ndarray, use_gpu_pipeline: bool = True) -> np.ndarray:
         """
@@ -681,7 +808,8 @@ class TiledYOLOInference:
             use_gpu_pipeline: Use fully GPU-optimized pipeline (faster)
             
         Returns:
-            Detections (N, 6) [x1, y1, x2, y2, conf, class_id]
+            Detections (N, 6 or 7) [x1, y1, x2, y2, conf, class_id, track_id*]
+            *track_id only included if enable_tracking=True
         """
         if use_gpu_pipeline and self.tile_extractor.use_gpu:
             return self._process_frame_gpu(frame)
@@ -707,9 +835,14 @@ class TiledYOLOInference:
         # 4. Merge detections with NMS
         final_detections = self.detection_merger.merge_tiles(tile_detections, self.config)
         
+        # 5. Apply object tracking (optional)
+        if self.enable_tracking and self.tracker is not None:
+            final_detections = self.tracker.update(final_detections)
+        
         elapsed = time.time() - start_time
         fps = 1.0 / elapsed if elapsed > 0 else 0
-        print(f"[TiledYOLOInference] Processed frame: {len(final_detections)} detections, "
+        track_info = f", {len(set(final_detections[:, 6]))} tracks" if self.enable_tracking and len(final_detections) > 0 else ""
+        print(f"[TiledYOLOInference] Processed frame: {len(final_detections)} detections{track_info}, "
               f"{elapsed*1000:.1f}ms ({fps:.1f} FPS)")
         
         return final_detections
@@ -736,9 +869,14 @@ class TiledYOLOInference:
         # 5. Merge detections with NMS
         final_detections = self.detection_merger.merge_tiles(tile_detections, self.config)
         
+        # 6. Apply object tracking (optional)
+        if self.enable_tracking and self.tracker is not None:
+            final_detections = self.tracker.update(final_detections)
+        
         elapsed = time.time() - start_time
         fps = 1.0 / elapsed if elapsed > 0 else 0
-        print(f"[TiledYOLOInference] Processed frame (GPU): {len(final_detections)} detections, "
+        track_info = f", {len(set(final_detections[:, 6]))} tracks" if self.enable_tracking and len(final_detections) > 0 else ""
+        print(f"[TiledYOLOInference] Processed frame (GPU): {len(final_detections)} detections{track_info}, "
               f"{elapsed*1000:.1f}ms ({fps:.1f} FPS)")
         
         return final_detections

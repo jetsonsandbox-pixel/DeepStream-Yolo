@@ -21,7 +21,8 @@ class VideoProcessor:
                  output_path: str = None,
                  display: bool = True,
                  conf_threshold: float = 0.25,
-                 labels_path: str = "labels.txt"):
+                 labels_path: str = "labels.txt",
+                 enable_tracking: bool = False):
         """
         Initialize video processor
         
@@ -32,11 +33,13 @@ class VideoProcessor:
             display: Whether to display results in window
             conf_threshold: Detection confidence threshold
             labels_path: Path to class labels file
+            enable_tracking: Enable ByteTrack object tracking
         """
         self.input_source = input_source
         self.output_path = output_path
         self.display = display
         self.conf_threshold = conf_threshold
+        self.enable_tracking = enable_tracking
         
         # Load class labels
         self.labels = self._load_labels(labels_path)
@@ -44,7 +47,7 @@ class VideoProcessor:
         # Initialize tiled inference pipeline
         print(f"[VideoProcessor] Initializing tiled inference with engine: {engine_path}")
         config = TileConfig()  # 1920x1080 -> 640x640 tiles
-        self.pipeline = TiledYOLOInference(engine_path, config)
+        self.pipeline = TiledYOLOInference(engine_path, config, enable_tracking=enable_tracking)
         
         # Open video source
         self.cap = self._open_video_source()
@@ -123,7 +126,7 @@ class VideoProcessor:
         
         Args:
             frame: Input frame (H, W, 3) BGR
-            detections: Detections (N, 6) [x1, y1, x2, y2, conf, class_id]
+            detections: Detections (N, 6 or 7) [x1, y1, x2, y2, conf, class_id, track_id*]
             
         Returns:
             Frame with drawn detections
@@ -131,20 +134,35 @@ class VideoProcessor:
         if len(detections) == 0:
             return frame
         
-        # Color palette for different classes
+        # Check if tracking is enabled (detections have 7 columns)
+        has_tracking = detections.shape[1] >= 7
+        
+        # Color palette for different classes (if not tracking) or tracks (if tracking)
         np.random.seed(42)
         colors = np.random.randint(0, 255, size=(len(self.labels) if self.labels else 80, 3), dtype=np.uint8)
         
+        # Color palette for tracks (consistent colors per track ID)
+        if has_tracking:
+            track_colors = np.random.randint(0, 255, size=(1000, 3), dtype=np.uint8)
+        
         for det in detections:
-            x1, y1, x2, y2, conf, class_id = det
+            if has_tracking:
+                x1, y1, x2, y2, conf, class_id, track_id = det
+                track_id = int(track_id)
+            else:
+                x1, y1, x2, y2, conf, class_id = det
+                track_id = -1
+            
             class_id = int(class_id)
             
             # Filter by confidence threshold
             if conf < self.conf_threshold:
                 continue
             
-            # Get color for this class
-            if class_id < len(colors):
+            # Get color (use track color if tracking enabled, else class color)
+            if has_tracking and track_id >= 0:
+                color = tuple(map(int, track_colors[track_id % len(track_colors)]))
+            elif class_id < len(colors):
                 color = tuple(map(int, colors[class_id]))
             else:
                 color = (0, 255, 0)
@@ -160,6 +178,10 @@ class VideoProcessor:
                 label = f"{self.labels[class_id]}: {conf:.2f}"
             else:
                 label = f"Class {class_id}: {conf:.2f}"
+            
+            # Add track ID if tracking is enabled
+            if has_tracking and track_id >= 0:
+                label += f" ID:{track_id}"
             
             # Draw label background
             (text_width, text_height), baseline = cv2.getTextSize(
@@ -325,6 +347,9 @@ def main():
                        default=None,
                        help='Maximum frames to process (None = all)')
     
+    parser.add_argument('--enable-tracking', action='store_true',
+                       help='Enable ByteTrack object tracking for consistent IDs across frames')
+    
     args = parser.parse_args()
     
     # Create processor
@@ -334,7 +359,8 @@ def main():
         output_path=args.output,
         display=not args.no_display,
         conf_threshold=args.conf,
-        labels_path=args.labels
+        labels_path=args.labels,
+        enable_tracking=args.enable_tracking
     )
     
     # Process video stream
