@@ -16,6 +16,12 @@ source /home/jet-nx8/Sandbox/ultralytics-env/bin/activate
 python3 realtime_tiled_detection.py --input video.mp4 --output result.mp4 --no-display --conf 0.25
 ```
 
+### Process with Object Tracking (NEW!)
+```bash
+python3 realtime_tiled_detection.py --input video.mp4 --output tracked.mp4 --enable-tracking --conf 0.20
+```
+*Adds consistent track IDs for objects across frames. See [BYTETRACK_TRACKING.md](docs/BYTETRACK_TRACKING.md)*
+
 ### Process Camera Feed
 ```bash
 python3 realtime_tiled_detection.py --input 0 --output camera.mp4 --conf 0.3
