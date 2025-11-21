@@ -4,15 +4,21 @@ net-scale-factor=0.0039215697906911373
 model-color-format=0
 onnx-file=yolo11n-2025-11-07_v4-0a.onnx
 
-# TILING MODE: Use batch=8 engine for processing 8 tiles simultaneously
+# TILING MODE with Custom Preprocessing
+# Uses custom preprocessing function to extract 8 tiles from each frame
 model-engine-file=model_b8_gpu0_fp32.engine
 
 #int8-calib-file=calib.table
 labelfile-path=labels.txt
 
-# CRITICAL: batch-size MUST match number of tiles
-# For 1920x1080 → 640x640 tiles with 96px overlap = 4x2 grid = 8 tiles
+# Custom preprocessing library for tile extraction
+custom-lib-name=nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
+
+# Batch size = number of tiles (8 tiles from 4x2 grid)
 batch-size=8
+
+# Enable custom preprocessing
+enable-custom-preprocess=1
 
 network-mode=0
 num-detected-classes=8
