@@ -1,0 +1,33 @@
+# nvdspreprocess configuration for tiled inference
+# This plugin processes frames BEFORE nvinfer and can implement custom tiling
+
+[property]
+enable=1
+target-unique-ids=1
+processing-width=1920
+processing-height=1080
+scaling-pool-compute-hw=0
+scaling-pool-memory-type=0
+
+# Custom preprocessing library for tile extraction
+custom-lib-name=libnvdsinfer_custom_impl_Yolo.so
+
+# Tile configuration
+# Split 1920x1080 frame into 8 tiles of 640x640 with 96px overlap
+[user-configs]
+tiling-mode=1
+tile-width=640
+tile-height=640  
+tile-overlap=96
+frame-width=1920
+frame-height=1080
+
+# Output configuration - prepare for batch inference
+[group-0]
+src-ids=0
+custom-input-transformation=NvDsCustomTransform_TiledInput
+dest-crop-rect-user-meta=1
+
+# Process frame into tiles
+network-input-shape=8;3;640;640
+# batch=8, channels=3, height=640, width=640

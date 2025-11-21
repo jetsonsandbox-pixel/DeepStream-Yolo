@@ -26,6 +26,8 @@
 #include "nvdsinfer_custom_impl.h"
 
 #include "utils.h"
+#include "nvdsinfer_tiled_config.h"
+#include "nvdsinfer_tiled_postprocessor.h"
 
 extern "C" bool
 NvDsInferParseYolo(std::vector<NvDsInferLayerInfo> const& outputLayersInfo, NvDsInferNetworkInfo const& networkInfo,
@@ -108,11 +110,21 @@ NvDsInferParseCustomYolo(std::vector<NvDsInferLayerInfo> const& outputLayersInfo
 
   const NvDsInferLayerInfo& output = outputLayersInfo[0];
   const uint outputSize = output.inferDims.d[0];
-
+  
+  // REALITY CHECK: DeepStream batch processing is for multiple video streams
+  // TRUE frame tiling requires either:
+  // A) Custom GStreamer plugin before nvinfer (complex, proper solution)
+  // B) Custom preprocessing hook (NvDsInfer supports but limited)  
+  // C) Accept single-frame processing with intelligent detection filtering
+  //
+  // Current implementation: Process frame normally, no tiling
+  // The batch-size=8 config was intended for tiling but DeepStream doesn't work that way
+  
+  // STANDARD MODE: Process detections from single frame
   std::vector<NvDsInferParseObjectInfo> outObjs = decodeTensorYolo((const float*) (output.buffer), outputSize,
       networkInfo.width, networkInfo.height, detectionParams.perClassPreclusterThreshold);
 
-  objects.insert(objects.end(), outObjs.begin(), outObjs.end());
+  objects.insert(objects.end(), outObjs.begin(), outObjs.end);
 
   objectList = objects;
 

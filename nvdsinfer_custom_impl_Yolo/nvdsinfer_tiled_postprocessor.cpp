@@ -229,6 +229,35 @@ static Detection convertToDetection(const NvDsInferParseObjectInfo& obj, int til
 }
 
 /**
+ * Simplified wrapper that returns merged detections directly
+ * 
+ * @param tileDetections Vector of detection lists, one per tile  
+ * @param config Tile configuration
+ * @param nmsThreshold NMS IoU threshold
+ * @return Merged and NMS-filtered detections
+ */
+std::vector<NvDsInferParseObjectInfo> mergeTiledDetections(
+    const std::vector<std::vector<NvDsInferParseObjectInfo>>& tileDetections,
+    const TileConfig& config,
+    float nmsThreshold)
+{
+    // Convert to internal Detection format
+    std::vector<std::vector<Detection>> tile_dets;
+    tile_dets.resize(tileDetections.size());
+    
+    for (size_t tile_idx = 0; tile_idx < tileDetections.size(); ++tile_idx) {
+        for (const auto& obj : tileDetections[tile_idx]) {
+            tile_dets[tile_idx].push_back(convertToDetection(obj, tile_idx));
+        }
+    }
+    
+    // Merge and return
+    std::vector<NvDsInferParseObjectInfo> result;
+    mergeTiledDetections(tile_dets, config, nmsThreshold, result);
+    return result;
+}
+
+/**
  * Wrapper function for integrating with existing NvDsInferParseYolo
  * Merges detections from batched inference (batch-size=8 tiles)
  * 

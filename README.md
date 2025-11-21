@@ -23,6 +23,7 @@ NVIDIA DeepStream SDK 8.0 / 7.1 / 7.0 / 6.4 / 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 
 * Custom ONNX model parser
 * Dynamic batch-size
 * INT8 calibration (PTQ) for Darknet and ONNX exported models
+* **Tiled inference support** for high-resolution aerial detection (1920×1080 → 8 tiles @ 640×640)
 
 ##
 
@@ -35,6 +36,7 @@ NVIDIA DeepStream SDK 8.0 / 7.1 / 7.0 / 6.4 / 6.3 / 6.2 / 6.1.1 / 6.1 / 6.0.1 / 
 * [Basic usage](#basic-usage)
 * [Docker usage](#docker-usage)
 * [NMS configuration](#nms-configuration)
+* [**Tiled inference (NEW!)**](REALTIME_DETECTION.md) - For aerial/high-res detection
 * [Notes](#notes)
 * [INT8 calibration](docs/INT8Calibration.md)
 * [YOLOv5 usage](docs/YOLOv5.md)
