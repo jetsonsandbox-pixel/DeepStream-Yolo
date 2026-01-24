@@ -13,15 +13,23 @@ nvbuf-memory-type=0
 
 [source0]
 enable=1
-type=3
-uri=file:///home/jet-nx8/Sandbox/test-data/iphone_day_fpv_kushi_shogla_people_08_11_2025.MOV
-num-sources=1
+# 1=Camera (V4L2), 2=URI, 3=MultiURI, 4=RTSP, 5=Camera (CSI; Jetson only)
+type=5
+uri=csi://0
+camera-width=1920
+camera-height=1080
+width=1920
+height=1080
+fps-n=30
+fps-d=1
 gpu-id=0
 cudadec-memtype=0
 
 [sink0]
 enable=1
+# 1=Fakesink, 2=EGL (nveglglessink), 3=Filesink, 4=RTSP, 5=Overlay (Jetson only)
 type=2
+# Indicates how fast the stream is to be rendered (0=As fast as possible, 1=Synchronously)
 sync=0
 gpu-id=0
 nvbuf-memory-type=0
