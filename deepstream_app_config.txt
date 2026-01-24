@@ -51,6 +51,10 @@ height=1080
 enable-padding=0
 nvbuf-memory-type=0
 
+[pre-process]
+enable=1
+config-file=config_preprocess_tiling.txt
+
 [primary-gie]
 enable=1
 gpu-id=0

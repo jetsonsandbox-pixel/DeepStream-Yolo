@@ -1,33 +1,36 @@
 # nvdspreprocess configuration for tiled inference
-# This plugin processes frames BEFORE nvinfer and can implement custom tiling
+# This plugin processes frames BEFORE nvinfer and implements custom tiling
 
 [property]
 enable=1
 target-unique-ids=1
+network-input-order=0
+process-on-frame=1
+gpu-id=0
+unique-id=5
 processing-width=1920
 processing-height=1080
 scaling-pool-compute-hw=0
 scaling-pool-memory-type=0
+scaling-filter=0
+scaling-buf-pool-size=4
+tensor-buf-pool-size=4
+network-input-shape=8;3;640;640
+network-color-format=0
+tensor-data-type=0
+tensor-name=input
+custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
+custom-tensor-preparation-function=CustomTensorPreparation
 
-# Custom preprocessing library for tile extraction
-custom-lib-name=libnvdsinfer_custom_impl_Yolo.so
-
-# Tile configuration
-# Split 1920x1080 frame into 8 tiles of 640x640 with 96px overlap
 [user-configs]
+# Tile configuration
 tiling-mode=1
 tile-width=640
-tile-height=640  
+tile-height=640
 tile-overlap=96
 frame-width=1920
 frame-height=1080
 
-# Output configuration - prepare for batch inference
 [group-0]
 src-ids=0
-custom-input-transformation=NvDsCustomTransform_TiledInput
 dest-crop-rect-user-meta=1
-
-# Process frame into tiles
-network-input-shape=8;3;640;640
-# batch=8, channels=3, height=640, width=640

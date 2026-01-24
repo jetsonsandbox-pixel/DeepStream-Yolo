@@ -124,7 +124,7 @@ NvDsInferParseCustomYolo(std::vector<NvDsInferLayerInfo> const& outputLayersInfo
   std::vector<NvDsInferParseObjectInfo> outObjs = decodeTensorYolo((const float*) (output.buffer), outputSize,
       networkInfo.width, networkInfo.height, detectionParams.perClassPreclusterThreshold);
 
-  objects.insert(objects.end(), outObjs.begin(), outObjs.end);
+  objects.insert(objects.end(), outObjs.begin(), outObjs.end());
 
   objectList = objects;
 

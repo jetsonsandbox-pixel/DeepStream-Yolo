@@ -46,8 +46,11 @@ endif
 CC:= g++
 NVCC:=/usr/local/cuda-$(CUDA_VER)/bin/nvcc
 
+GST_CFLAGS:= $(shell pkg-config --cflags gstreamer-1.0)
+GST_CFLAGS_NO_PTHREAD:= $(filter-out -pthread,$(GST_CFLAGS))
 CFLAGS:= -Wall -std=c++11 -shared -fPIC -Wno-error=deprecated-declarations
-CFLAGS+= -I/opt/nvidia/deepstream/deepstream/sources/includes -I/usr/local/cuda-$(CUDA_VER)/include
+PREPROCESS_INCLUDE:= -I/opt/nvidia/deepstream/deepstream/sources/gst-plugins/gst-nvdspreprocess/include -I/opt/nvidia/deepstream/deepstream/sources/gst-plugins/gst-nvdspreprocess/nvdspreprocess_lib
+CFLAGS+= $(GST_CFLAGS) -I/opt/nvidia/deepstream/deepstream/sources/includes $(PREPROCESS_INCLUDE) -I/usr/local/cuda-$(CUDA_VER)/include
 
 ifeq ($(OPENCV), 1)
 	COMMON+= -DOPENCV
@@ -59,7 +62,7 @@ ifeq ($(GRAPH), 1)
 	COMMON+= -DGRAPH
 endif
 
-CUFLAGS:= -I/opt/nvidia/deepstream/deepstream/sources/includes -I/usr/local/cuda-$(CUDA_VER)/include
+CUFLAGS:= $(GST_CFLAGS_NO_PTHREAD) -I/opt/nvidia/deepstream/deepstream/sources/includes $(PREPROCESS_INCLUDE) -I/usr/local/cuda-$(CUDA_VER)/include
 
 ifeq ($(shell ldconfig -p | grep -q libnvparsers && echo 1 || echo 0), 1)
 	LIBS+= -lnvparsers
