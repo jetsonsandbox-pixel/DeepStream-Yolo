@@ -8,8 +8,8 @@ network-input-order=0
 process-on-frame=1
 gpu-id=0
 unique-id=5
-processing-width=1920
-processing-height=1080
+processing-width=640
+processing-height=640
 scaling-pool-compute-hw=0
 scaling-pool-memory-type=0
 scaling-filter=0
@@ -19,7 +19,7 @@ network-input-shape=8;3;640;640
 network-color-format=0
 tensor-data-type=0
 tensor-name=input
-custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
+custom-lib-path=/home/jet-nx8/DeepStream-Yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
 custom-tensor-preparation-function=CustomTensorPreparation
 
 [user-configs]
@@ -34,3 +34,4 @@ frame-height=1080
 [group-0]
 src-ids=0
 dest-crop-rect-user-meta=1
+process-on-roi=0

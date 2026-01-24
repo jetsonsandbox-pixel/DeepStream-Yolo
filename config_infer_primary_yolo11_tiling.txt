@@ -11,14 +11,8 @@ model-engine-file=model_b8_gpu0_fp32.engine
 #int8-calib-file=calib.table
 labelfile-path=labels.txt
 
-# Custom preprocessing library for tile extraction
-custom-lib-name=nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
-
 # Batch size = number of tiles (8 tiles from 4x2 grid)
 batch-size=8
-
-# Enable custom preprocessing
-enable-custom-preprocess=1
 
 network-mode=0
 num-detected-classes=8
