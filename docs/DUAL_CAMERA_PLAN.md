@@ -119,14 +119,11 @@ topk=300
 File: `labels_thermal.txt`
 
 ```
-person
-car
-truck
-bus
-motorcycle
-bicycle
-animal
-other
+plane
+missile
+bird
+unrecognized
+drone
 ```
 
 ### Step 4: Create Dual Camera Pipeline Launcher

@@ -3,6 +3,3 @@ missile
 bird
 unrecognized
 drone
-vehicle
-person
-animal

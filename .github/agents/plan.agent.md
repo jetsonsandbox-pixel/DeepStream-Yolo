@@ -3,7 +3,7 @@ model: GPT-5.1-Codex-Max (copilot)
 description: "Strategic planning and architecture assistant focused on thoughtful analysis before implementation. Helps developers understand codebases, clarify requirements, and develop comprehensive implementation strategies."
 name: "Plan Mode - Strategic Planning & Architecture"
 tools:
-  ['vscode/getProjectSetupInfo', 'vscode/vscodeAPI', 'vscode/extensions', 'read', 'search', 'web', 'copilot-container-tools/inspect_container', 'copilot-container-tools/inspect_image', 'copilot-container-tools/list_networks', 'copilot-container-tools/list_volumes', 'copilot-container-tools/logs_for_container', 'agent', 'pylance-mcp-server/pylanceDocuments', 'pylance-mcp-server/pylancePythonEnvironments', 'pylance-mcp-server/pylanceSettings', 'github.vscode-pull-request-github/doSearch', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-toolsai.jupyter/listNotebookPackages', 'todo']
+  ['vscode/getProjectSetupInfo', 'vscode/vscodeAPI', 'vscode/extensions', 'read', 'search', 'web', 'copilot-container-tools/inspect_image', 'copilot-container-tools/list_networks', 'copilot-container-tools/list_volumes', 'copilot-container-tools/logs_for_container', 'agent', 'pylance-mcp-server/pylanceDocuments', 'pylance-mcp-server/pylancePythonEnvironments', 'pylance-mcp-server/pylanceSettings', 'github.vscode-pull-request-github/doSearch', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-toolsai.jupyter/listNotebookPackages', 'todo']
 ---
 
 # Plan Mode - Strategic Planning & Architecture Assistant
