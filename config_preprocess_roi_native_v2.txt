@@ -1,0 +1,28 @@
+# nvdspreprocess configuration for NATIVE ROI-based tiling
+# Based on DeepStream 8.0 documentation (Ukrainian guide)
+# Uses process-mode=0 with roi-params-src-0 for tile extraction
+
+[property]
+enable=1
+target-unique-ids=1
+network-input-order=0
+gpu-id=0
+network-input-shape=8;3;640;640
+network-color-format=0
+tensor-data-type=0
+tensor-name=input
+scaling-buf-pool-size=2
+tensor-buf-pool-size=2
+
+[group-0]
+src-ids=0
+# process-mode=0 means ROI extraction
+process-mode=0
+# All 8 ROI coordinates in one line: x;y;w;h;x;y;w;h;...
+# 4×2 grid, 640×640 tiles, 96px overlap, stride=544
+# Row 0 (y=0): tiles at x=0, 544, 1088, 1632
+# Row 1 (y=544): tiles at x=0, 544, 1088, 1632
+roi-params-src-0=0;0;640;640;544;0;640;640;1088;0;640;640;1632;0;640;640;0;544;640;640;544;544;640;640;1088;544;640;640;1632;544;640;640
+
+# Note: This eliminates need for custom CUDA kernel!
+# nvdspreprocess handles ROI extraction natively
