@@ -65,7 +65,7 @@ __global__ void extractTilesKernel(
         if (tile_x < actual_width && tile_y < actual_height &&
             src_x < input_width && src_y < input_height) {
             // Copy RGB channels from input to output
-            // Use width, not pitch! The converted buffer is contiguous RGB
+            // Input is HWC (RGB interleaved), output is also HWC per tile
             int src_idx = (src_y * input_width + src_x) * 3;  // RGB without pitch
             int dst_idx = (tile_idx * pixels_per_tile + pixel_idx) * 3;
             
