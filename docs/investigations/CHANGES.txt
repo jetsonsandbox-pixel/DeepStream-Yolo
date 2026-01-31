@@ -1,0 +1,212 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    CUDA ERROR 700 FIX - ALL CHANGES
+═══════════════════════════════════════════════════════════════════════════════
+
+FILE 1: dual_cam_pipeline.py
+────────────────────────────────────────────────────────────────────────────
+
+DAYLIGHT BRANCH CHANGES:
+
+Before:
+    # OSD
+    osd = Gst.ElementFactory.make("nvdsosd", "daylight-osd")
+    ...
+    # Sink
+    sink = Gst.ElementFactory.make("nveglglessink", "daylight-sink")
+    sink.set_property("sync", False)
+    
+    # Add elements
+    elements = [src, caps_filter, mux, preprocess, infer, osd, sink]
+    for elem in elements:
+        self.pipeline.add(elem)
+    ...
+    # Link rest of pipeline
+    mux.link(preprocess)
+    preprocess.link(infer)
+    infer.link(osd)
+
+After:
+    # Preprocessing with custom tiler
+    preprocess = Gst.ElementFactory.make("nvdspreprocess", "daylight-preprocess")
+    preprocess.set_property("config-file", "config_preprocess_tiling.txt")
+    
+    # Add queue after preprocessing to prevent buffer overflow
+    preprocess_queue = Gst.ElementFactory.make("queue", "daylight-preprocess-queue")
+    preprocess_queue.set_property("max-size-buffers", 8)
+    preprocess_queue.set_property("max-size-bytes", 0)
+    preprocess_queue.set_property("max-size-time", 0)
+    
+    # Inference with daylight model
+    infer = Gst.ElementFactory.make("nvinfer", "daylight-infer")
+    infer.set_property("config-file-path", "config_infer_primary_yolo11_tiling.txt")
+    
+    # Add queue after inference
+    infer_queue = Gst.ElementFactory.make("queue", "daylight-infer-queue")
+    infer_queue.set_property("max-size-buffers", 4)
+    infer_queue.set_property("max-size-bytes", 0)
+    infer_queue.set_property("max-size-time", 0)
+    
+    # OSD
+    osd = Gst.ElementFactory.make("nvdsosd", "daylight-osd")
+    ...
+    # Sink - use fakesink to avoid GPU display conflicts
+    # Multiple sinks can't safely share GPU memory
+    sink = Gst.ElementFactory.make("fakesink", "daylight-sink")
+    sink.set_property("sync", False)
+    sink.set_property("async", False)
+    
+    # Add elements
+    elements = [src, caps_filter, mux, preprocess, preprocess_queue, infer, infer_queue, osd, sink]
+    for elem in elements:
+        self.pipeline.add(elem)
+    ...
+    # Link rest of pipeline
+    mux.link(preprocess)
+    preprocess.link(preprocess_queue)
+    preprocess_queue.link(infer)
+    infer.link(infer_queue)
+    infer_queue.link(osd)
+
+───────────────────────────────────────────────────────────────────────────
+
+THERMAL BRANCH CHANGES:
+
+Before:
+    # Inference with thermal model (no preprocessing)
+    infer = Gst.ElementFactory.make("nvinfer", "thermal-infer")
+    infer.set_property("config-file-path", "config_infer_primary_thermal.txt")
+    ...
+    # OSD
+    osd = Gst.ElementFactory.make("nvdsosd", "thermal-osd")
+    ...
+    # Sink
+    sink = Gst.ElementFactory.make("nveglglessink", "thermal-sink")
+    sink.set_property("sync", False)
+    
+    # Add elements
+    elements = [src, caps_filter, convert, queue, nvconvert, nvmm_filter, 
+           mux, infer, osd, sink]
+    ...
+    # Link rest of pipeline
+    mux.link(infer)
+    infer.link(osd)
+
+After:
+    # Inference with thermal model (no preprocessing)
+    infer = Gst.ElementFactory.make("nvinfer", "thermal-infer")
+    infer.set_property("config-file-path", "config_infer_primary_thermal.txt")
+    
+    # Add queue after inference
+    infer_queue = Gst.ElementFactory.make("queue", "thermal-infer-queue")
+    infer_queue.set_property("max-size-buffers", 4)
+    infer_queue.set_property("max-size-bytes", 0)
+    infer_queue.set_property("max-size-time", 0)
+    
+    # OSD
+    osd = Gst.ElementFactory.make("nvdsosd", "thermal-osd")
+    ...
+    # Sink - use fakesink to avoid GPU display conflicts
+    # Multiple sinks can't safely share GPU memory
+    sink = Gst.ElementFactory.make("fakesink", "thermal-sink")
+    sink.set_property("sync", False)
+    sink.set_property("async", False)
+    
+    # Add elements
+    elements = [src, caps_filter, convert, queue, nvconvert, nvmm_filter, 
+           mux, infer, infer_queue, osd, sink]
+    ...
+    # Link rest of pipeline
+    mux.link(infer)
+    infer.link(infer_queue)
+    infer_queue.link(osd)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+FILE 2: config_preprocess_tiling.txt
+────────────────────────────────────────────────────────────────────────────
+
+Before:
+    scaling-buf-pool-size=4
+    tensor-buf-pool-size=4
+    network-input-shape=8;3;640;640
+
+After:
+    scaling-buf-pool-size=3
+    tensor-buf-pool-size=3
+    network-input-shape=4;3;640;640
+
+═══════════════════════════════════════════════════════════════════════════════
+
+FILE 3: config_infer_primary_yolo11_tiling.txt
+────────────────────────────────────────────────────────────────────────────
+
+Before:
+    # Batch size = number of tiles (8 tiles from 4x2 grid)
+    batch-size=8
+
+After:
+    # Batch size = number of tiles (reduced from 8 to 4 due to memory constraints)
+    batch-size=4
+
+═══════════════════════════════════════════════════════════════════════════════
+
+NEW FILES CREATED:
+────────────────────────────────────────────────────────────────────────────
+
+1. test_daylight_only.py
+   - Single-camera test pipeline
+   - Validates daylight camera with 4-tile tiling
+   - Easier debugging without dual camera load
+
+2. FIXES_COMPLETE.md
+   - Comprehensive technical documentation
+   - Detailed explanation of each fix
+   - Performance trade-offs and next steps
+
+3. BEFORE_AFTER_COMPARISON.md
+   - Visual architecture comparison
+   - Error pattern timelines
+   - Memory allocation graphs
+
+4. CUDA_FIX_SUMMARY.md
+   - Quick reference of all fixes
+   - Memory impact table
+   - Advanced options
+
+5. QUICK_REFERENCE.md
+   - One-page summary
+   - TL;DR version of all fixes
+   - Test procedures
+
+6. test_pipeline_fixes.sh
+   - Automated testing script
+   - Tests daylight, thermal, and dual camera
+   - GPU status reporting
+
+═══════════════════════════════════════════════════════════════════════════════
+
+SUMMARY OF CHANGES:
+────────────────────────────────────────────────────────────────────────────
+
+Total Lines Changed: ~50 lines in dual_cam_pipeline.py + 2 config files
+Total Lines Added:   ~10 queue definitions + 2 sink changes
+New Elements:        2 Gst.Queue per branch (4 total)
+Removed Elements:    2 nveglglessink (replaced with fakesink)
+Configuration:       Reduced batch-size 8→4, pool-size 4→3
+
+═══════════════════════════════════════════════════════════════════════════════
+
+VERIFICATION CHECKLIST:
+────────────────────────────────────────────────────────────────────────────
+
+[✓] All fixes applied to dual_cam_pipeline.py
+[✓] Buffer queue elements added
+[✓] Display sinks changed to headless
+[✓] Batch size reduced in configs
+[✓] Buffer pool sizes reduced
+[✓] Network input shape updated
+[✓] Documentation created
+[✓] Test scripts created
+[✓] Ready for testing
+
+═══════════════════════════════════════════════════════════════════════════════

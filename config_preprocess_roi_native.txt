@@ -1,0 +1,43 @@
+# nvdspreprocess configuration for ROI-based tiling
+# Uses DeepStream native ROI processing instead of custom CUDA kernel
+
+[property]
+enable=1
+target-unique-ids=1
+network-input-order=0
+process-on-frame=1
+gpu-id=0
+unique-id=5
+processing-width=640
+processing-height=640
+scaling-pool-compute-hw=0
+scaling-pool-memory-type=0
+scaling-filter=0
+scaling-buf-pool-size=2
+tensor-buf-pool-size=2
+network-input-shape=8;3;640;640
+network-color-format=0
+tensor-data-type=0
+tensor-name=input
+
+# Enable ROI processing
+process-on-roi=1
+operate-on-gie-id=-1
+
+# ROI Filtering for stream 0 (daylight camera)
+# 8 tiles in 4×2 grid with 96px overlap
+[roi-filtering-stream-0]
+roi-count=8
+# Top row (y=0)
+roi-0=0;0;640;640
+roi-1=544;0;640;640
+roi-2=1088;0;640;640
+roi-3=1280;0;640;640
+# Bottom row (y=440) - adjusted to fit 1080 height
+roi-4=0;440;640;640
+roi-5=544;440;640;640
+roi-6=1088;440;640;640
+roi-7=1280;440;640;640
+
+# No custom CUDA kernel needed!
+# DeepStream handles ROI extraction natively
