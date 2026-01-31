@@ -76,8 +76,11 @@ extern "C" CustomCtx* initLib(CustomInitParams initparams) {
     return nullptr;
   }
 
-  cudaError_t cudaErr = cudaStreamCreateWithFlags(&ctx->stream, cudaStreamNonBlocking);
+  cudaError_t cudaErr = cudaStreamCreateWithFlags(&ctx->stream, cudaStreamDefault);
   if (cudaErr != cudaSuccess) {
+    fprintf(stderr, "ERROR: Failed to create CUDA stream: %s\n", cudaGetErrorString(cudaErr));
+    delete ctx;
+    return nullptr;
     delete ctx;
     return nullptr;
   }
@@ -112,22 +115,58 @@ extern "C" NvDsPreProcessStatus CustomTensorPreparation(
 
   const NvDsPreProcessUnit& unit = batch->units[0];
   if (!unit.converted_frame_ptr) {
+    fprintf(stderr, "ERROR: converted_frame_ptr is NULL\n");
     acquirer->release(buf);
     return NVDSPREPROCESS_INVALID_PARAMS;
   }
 
+  // Defensive: clear any pending CUDA errors before our operation
+  cudaGetLastError();
+
   const unsigned char* d_input =
       reinterpret_cast<const unsigned char*>(unit.converted_frame_ptr);
   unsigned char* d_output = reinterpret_cast<unsigned char*>(buf->memory_ptr);
+  
+  // Validate pointers are accessible (will catch some memory issues early)
+  cudaPointerAttributes inputAttrs, outputAttrs;
+  cudaError_t checkErr = cudaPointerGetAttributes(&inputAttrs, d_input);
+  if (checkErr != cudaSuccess) {
+    fprintf(stderr, "ERROR: Input pointer validation failed: %s\n", cudaGetErrorString(checkErr));
+    cudaGetLastError(); // Clear error
+    acquirer->release(buf);
+    return NVDSPREPROCESS_INVALID_PARAMS;
+  }
+  
+  checkErr = cudaPointerGetAttributes(&outputAttrs, d_output);
+  if (checkErr != cudaSuccess) {
+    fprintf(stderr, "ERROR: Output pointer validation failed: %s\n", cudaGetErrorString(checkErr));
+    cudaGetLastError(); // Clear error
+    acquirer->release(buf);
+    return NVDSPREPROCESS_RESOURCE_ERROR;
+  }
+
   bool success = launchTileExtractionKernel(
       d_input, d_output, ctx->tile_config, ctx->stream);
   if (!success) {
+    fprintf(stderr, "ERROR: Tile extraction kernel launch returned false\n");
     acquirer->release(buf);
     return NVDSPREPROCESS_CUSTOM_TENSOR_FAILED;
   }
 
+  // Synchronize stream to ensure kernel completes before buffer is used
   cudaError_t syncErr = cudaStreamSynchronize(ctx->stream);
   if (syncErr != cudaSuccess) {
+    fprintf(stderr, "ERROR: Stream synchronization failed: %s\n", cudaGetErrorString(syncErr));
+    cudaGetLastError(); // Clear error
+    acquirer->release(buf);
+    return NVDSPREPROCESS_CUDA_ERROR;
+  }
+  
+  // Also synchronize device to catch context-wide issues early
+  cudaError_t deviceErr = cudaDeviceSynchronize();
+  if (deviceErr != cudaSuccess) {
+    fprintf(stderr, "ERROR: Device synchronization failed: %s\n", cudaGetErrorString(deviceErr));
+    cudaGetLastError(); // Clear error
     acquirer->release(buf);
     return NVDSPREPROCESS_CUDA_ERROR;
   }

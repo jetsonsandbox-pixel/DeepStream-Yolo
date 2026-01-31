@@ -78,7 +78,7 @@ class DualCameraPipeline:
         
         # Sink - use fakesink to avoid GPU display conflicts
         # Multiple sinks can't safely share GPU memory
-        sink = Gst.ElementFactory.make("nveglglessink", "daylight-sink")    # fakesink instead nveglglessink
+        sink = Gst.ElementFactory.make("fakesink", "daylight-sink")    # fakesink instead nveglglessink
         sink.set_property("sync", False)
         sink.set_property("async", False)
         

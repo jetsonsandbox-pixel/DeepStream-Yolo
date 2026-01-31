@@ -56,25 +56,33 @@ __global__ void extractTilesKernel(
         int tile_y = pixel_idx / tile_width;
         int tile_x = pixel_idx % tile_width;
         
+        // Calculate source coordinates in input frame
+        int src_x = x_start + tile_x;
+        int src_y = y_start + tile_y;
+        
         // Handle edge tiles with zero padding if needed
-        if (tile_x < actual_width && tile_y < actual_height) {
+        // Bounds check on BOTH tile boundaries AND input frame boundaries
+        if (tile_x < actual_width && tile_y < actual_height &&
+            src_x < input_width && src_y < input_height) {
             // Copy RGB channels from input to output
-            int src_x = x_start + tile_x;
-            int src_y = y_start + tile_y;
-            int src_idx = (src_y * input_width + src_x) * 3;  // RGB
+            // Use width, not pitch! The converted buffer is contiguous RGB
+            int src_idx = (src_y * input_width + src_x) * 3;  // RGB without pitch
             int dst_idx = (tile_idx * pixels_per_tile + pixel_idx) * 3;
             
             output[dst_idx + 0] = input[src_idx + 0];  // R
             output[dst_idx + 1] = input[src_idx + 1];  // G
             output[dst_idx + 2] = input[src_idx + 2];  // B
         } else {
-            // Pad with zeros for edge tiles
+            // Pad with zeros for edge tiles or out-of-bounds pixels
             int dst_idx = (tile_idx * pixels_per_tile + pixel_idx) * 3;
             output[dst_idx + 0] = 0;
             output[dst_idx + 1] = 0;
             output[dst_idx + 2] = 0;
         }
     }
+    
+    // Memory fence to ensure all writes complete before kernel exits
+    __threadfence();
 }
 
 /**
@@ -95,6 +103,16 @@ bool launchTileExtractionKernel(
 {
     if (!d_input || !d_output) {
         fprintf(stderr, "ERROR: Invalid input/output pointers for tile extraction\n");
+        return false;
+    }
+    
+    // Validate input buffer size expectations
+    size_t expected_input_size = config.frame_width * config.frame_height * 3;
+    size_t expected_output_size = config.total_tiles * config.tile_width * config.tile_height * 3;
+    
+    if (expected_input_size == 0 || expected_output_size == 0) {
+        fprintf(stderr, "ERROR: Invalid buffer size calculation (input=%zu, output=%zu)\n",
+                expected_input_size, expected_output_size);
         return false;
     }
     
@@ -119,7 +137,7 @@ bool launchTileExtractionKernel(
         config.tiles_y
     );
     
-    // Check for kernel launch errors
+    // Check for kernel launch errors immediately
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "ERROR: Tile extraction kernel launch failed: %s\n", 
@@ -127,6 +145,7 @@ bool launchTileExtractionKernel(
         return false;
     }
     
+    // Don't synchronize here - let host handle it to avoid double sync
     return true;
 }
 
