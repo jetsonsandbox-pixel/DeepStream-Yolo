@@ -49,9 +49,25 @@ class DualCameraPipeline:
         preprocess = Gst.ElementFactory.make("nvdspreprocess", "daylight-preprocess")
         preprocess.set_property("config-file", "config_preprocess_tiling.txt")
         
+        # Add queue after preprocessing to prevent buffer overflow
+        preprocess_queue = Gst.ElementFactory.make("queue", "daylight-preprocess-queue")
+        preprocess_queue.set_property("max-size-buffers", 4)
+        preprocess_queue.set_property("max-size-bytes", 0)
+        preprocess_queue.set_property("max-size-time", 0)
+        preprocess_queue.set_property("leaky", 0)  # No leaky, block instead
+        
         # Inference with daylight model
         infer = Gst.ElementFactory.make("nvinfer", "daylight-infer")
         infer.set_property("config-file-path", "config_infer_primary_yolo11_tiling.txt")
+        infer.set_property("gpu-id", 0)
+        infer.set_property("input-tensor-meta", True)
+        
+        # Add queue after inference
+        infer_queue = Gst.ElementFactory.make("queue", "daylight-infer-queue")
+        infer_queue.set_property("max-size-buffers", 2)
+        infer_queue.set_property("max-size-bytes", 0)
+        infer_queue.set_property("max-size-time", 0)
+        infer_queue.set_property("leaky", 2)  # Leak downstream (drop old buffers)
         
         # OSD
         osd = Gst.ElementFactory.make("nvdsosd", "daylight-osd")
@@ -60,12 +76,14 @@ class DualCameraPipeline:
         osd_sink_pad = osd.get_static_pad("sink")
         osd_sink_pad.add_probe(Gst.PadProbeType.BUFFER, self.daylight_fps_probe, None)
         
-        # Sink
-        sink = Gst.ElementFactory.make("nveglglessink", "daylight-sink")
+        # Sink - use fakesink to avoid GPU display conflicts
+        # Multiple sinks can't safely share GPU memory
+        sink = Gst.ElementFactory.make("nveglglessink", "daylight-sink")    # fakesink instead nveglglessink
         sink.set_property("sync", False)
+        sink.set_property("async", False)
         
         # Add elements
-        elements = [src, caps_filter, mux, preprocess, infer, osd, sink]
+        elements = [src, caps_filter, mux, preprocess, preprocess_queue, infer, infer_queue, osd, sink]
         for elem in elements:
             self.pipeline.add(elem)
         
@@ -78,35 +96,43 @@ class DualCameraPipeline:
         src_pad.link(sink_pad)
         
         # Link rest of pipeline
+        # Link rest of pipeline
         mux.link(preprocess)
-        preprocess.link(infer)
-        infer.link(osd)
+        preprocess.link(preprocess_queue)
+        preprocess_queue.link(infer)
+        infer.link(infer_queue)
+        infer_queue.link(osd)
         osd.link(sink)
         
         return True
     
     def build_thermal_branch(self):
         """Build thermal USB branch without tiling"""
-        # Source: USB camera
+        # Source: USB camera (thermal)
         src = Gst.ElementFactory.make("v4l2src", "thermal-src")
         src.set_property("device", "/dev/video1")
-        
-        # Caps: 640x512
+
+        # Caps: native thermal resolution and format
         caps = Gst.Caps.from_string(
-            "video/x-raw, width=640, height=512, framerate=30/1"
+            "video/x-raw, width=640, height=512, format=YUY2, framerate=30/1"
         )
         caps_filter = Gst.ElementFactory.make("capsfilter", "thermal-caps")
         caps_filter.set_property("caps", caps)
-        
-        # Video convert
+
+        # Video convert to match CUDA expectations
         convert = Gst.ElementFactory.make("videoconvert", "thermal-convert")
-        
+
+        # Queue to decouple from nvvideoconvert
+        queue = Gst.ElementFactory.make("queue", "thermal-queue")
+        queue.set_property("max-size-buffers", 3)
+
         # NVMM upload
         nvconvert = Gst.ElementFactory.make("nvvideoconvert", "thermal-nvconvert")
-        
-        # NVMM caps
+        nvconvert.set_property("nvbuf-memory-type", 0)
+
+        # NVMM caps for TensorRT
         nvmm_caps = Gst.Caps.from_string(
-            "video/x-raw(memory:NVMM), format=RGBA"
+            "video/x-raw(memory:NVMM), format=NV12"
         )
         nvmm_filter = Gst.ElementFactory.make("capsfilter", "thermal-nvmm-caps")
         nvmm_filter.set_property("caps", nvmm_caps)
@@ -117,10 +143,19 @@ class DualCameraPipeline:
         mux.set_property("height", 512)
         mux.set_property("batch-size", 1)
         mux.set_property("live-source", True)
+        mux.set_property("batched-push-timeout", 40000)
         
         # Inference with thermal model (no preprocessing)
         infer = Gst.ElementFactory.make("nvinfer", "thermal-infer")
         infer.set_property("config-file-path", "config_infer_primary_thermal.txt")
+        infer.set_property("gpu-id", 0)
+        
+        # Add queue after inference
+        infer_queue = Gst.ElementFactory.make("queue", "thermal-infer-queue")
+        infer_queue.set_property("max-size-buffers", 2)
+        infer_queue.set_property("max-size-bytes", 0)
+        infer_queue.set_property("max-size-time", 0)
+        infer_queue.set_property("leaky", 2)  # Leak downstream (drop old buffers)
         
         # OSD
         osd = Gst.ElementFactory.make("nvdsosd", "thermal-osd")
@@ -129,20 +164,23 @@ class DualCameraPipeline:
         osd_sink_pad = osd.get_static_pad("sink")
         osd_sink_pad.add_probe(Gst.PadProbeType.BUFFER, self.thermal_fps_probe, None)
         
-        # Sink
-        sink = Gst.ElementFactory.make("nveglglessink", "thermal-sink")
+        # Sink - use fakesink to avoid GPU display conflicts
+        # Multiple sinks can't safely share GPU memory
+        sink = Gst.ElementFactory.make("fakesink", "thermal-sink")    # fakesink instead nveglglessink
         sink.set_property("sync", False)
+        sink.set_property("async", False)
         
         # Add elements
-        elements = [src, caps_filter, convert, nvconvert, nvmm_filter, 
-                   mux, infer, osd, sink]
+        elements = [src, caps_filter, convert, queue, nvconvert, nvmm_filter, 
+               mux, infer, infer_queue, osd, sink]
         for elem in elements:
             self.pipeline.add(elem)
         
         # Link elements
         src.link(caps_filter)
         caps_filter.link(convert)
-        convert.link(nvconvert)
+        convert.link(queue)
+        queue.link(nvconvert)
         nvconvert.link(nvmm_filter)
         
         # Link to mux sink pad
@@ -152,7 +190,8 @@ class DualCameraPipeline:
         
         # Link rest of pipeline
         mux.link(infer)
-        infer.link(osd)
+        infer.link(infer_queue)
+        infer_queue.link(osd)
         osd.link(sink)
         
         return True
