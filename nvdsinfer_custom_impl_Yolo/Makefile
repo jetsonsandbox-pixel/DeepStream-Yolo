@@ -62,7 +62,9 @@ ifeq ($(GRAPH), 1)
 	COMMON+= -DGRAPH
 endif
 
-CUFLAGS:= $(GST_CFLAGS_NO_PTHREAD) -I/opt/nvidia/deepstream/deepstream/sources/includes $(PREPROCESS_INCLUDE) -I/usr/local/cuda-$(CUDA_VER)/include
+# Detect GPU architecture - Jetson Orin NX is sm_87
+CUDA_ARCH?=87
+CUFLAGS:= -arch=sm_$(CUDA_ARCH) $(GST_CFLAGS_NO_PTHREAD) -I/opt/nvidia/deepstream/deepstream/sources/includes $(PREPROCESS_INCLUDE) -I/usr/local/cuda-$(CUDA_VER)/include
 
 ifeq ($(shell ldconfig -p | grep -q libnvparsers && echo 1 || echo 0), 1)
 	LIBS+= -lnvparsers

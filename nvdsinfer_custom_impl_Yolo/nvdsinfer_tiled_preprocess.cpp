@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <cuda_runtime_api.h>
+#include <cuda_fp16.h>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <new>
 #include <string>
 #include <unordered_map>
@@ -11,10 +13,18 @@
 #include "nvdspreprocess_interface.h"
 #include "nvdspreprocess_lib.h"
 
-extern "C" bool launchTileExtractionKernel(
+// Global mutex to serialize CUDA operations across multiple pipeline instances
+// This prevents race conditions when dual cameras run simultaneously
+static std::mutex g_cuda_mutex;
+
+// Forward declaration of CUDA kernel for UINT8->FP16 conversion
+extern "C" void launchUint8ToFp16Kernel(
     const unsigned char* d_input,
-    unsigned char* d_output,
-    const TileConfig& config,
+    __half* d_output,
+    int width,
+    int height,
+    int num_tiles,
+    float scale_factor,
     cudaStream_t stream);
 
 struct CustomCtx {
@@ -81,10 +91,10 @@ extern "C" CustomCtx* initLib(CustomInitParams initparams) {
     fprintf(stderr, "ERROR: Failed to create CUDA stream: %s\n", cudaGetErrorString(cudaErr));
     delete ctx;
     return nullptr;
-    delete ctx;
-    return nullptr;
   }
 
+  fprintf(stderr, "INFO: Custom tiling library initialized - %d tiles (%dx%d)\n",
+          ctx->tile_config.total_tiles, ctx->tile_config.tiles_x, ctx->tile_config.tiles_y);
   return ctx;
 }
 
@@ -105,75 +115,77 @@ extern "C" NvDsPreProcessStatus CustomTensorPreparation(
     CustomTensorParams& tensorParam,
     NvDsPreProcessAcquirer* acquirer) {
   if (!ctx || !batch || batch->units.empty() || !acquirer) {
+    fprintf(stderr, "ERROR: Invalid parameters in CustomTensorPreparation\n");
     return NVDSPREPROCESS_INVALID_PARAMS;
+  }
+
+  // Acquire mutex to serialize CUDA operations across multiple pipelines
+  std::lock_guard<std::mutex> lock(g_cuda_mutex);
+
+  // Clear any stale CUDA errors from previous operations
+  cudaError_t prevErr = cudaGetLastError();
+  if (prevErr != cudaSuccess) {
+    fprintf(stderr, "WARN: Cleared previous CUDA error: %s\n", cudaGetErrorString(prevErr));
   }
 
   buf = acquirer->acquire();
   if (!buf || !buf->memory_ptr) {
+    fprintf(stderr, "ERROR: Failed to acquire tensor buffer\n");
     return NVDSPREPROCESS_RESOURCE_ERROR;
   }
 
   const NvDsPreProcessUnit& unit = batch->units[0];
+  
+  // converted_frame_ptr is 640x640 RGB HWC UINT8 (scaled by nvdspreprocess)
+  // We need to convert to FP16 NCHW and duplicate 8 times for batch=8 engine
   if (!unit.converted_frame_ptr) {
     fprintf(stderr, "ERROR: converted_frame_ptr is NULL\n");
     acquirer->release(buf);
     return NVDSPREPROCESS_INVALID_PARAMS;
   }
 
-  // Defensive: clear any pending CUDA errors before our operation
-  cudaGetLastError();
-
   const unsigned char* d_input =
       reinterpret_cast<const unsigned char*>(unit.converted_frame_ptr);
-  unsigned char* d_output = reinterpret_cast<unsigned char*>(buf->memory_ptr);
+  __half* d_output = reinterpret_cast<__half*>(buf->memory_ptr);
   
-  // Validate pointers are accessible (will catch some memory issues early)
-  cudaPointerAttributes inputAttrs, outputAttrs;
-  cudaError_t checkErr = cudaPointerGetAttributes(&inputAttrs, d_input);
-  if (checkErr != cudaSuccess) {
-    fprintf(stderr, "ERROR: Input pointer validation failed: %s\n", cudaGetErrorString(checkErr));
-    cudaGetLastError(); // Clear error
-    acquirer->release(buf);
-    return NVDSPREPROCESS_INVALID_PARAMS;
-  }
+  // Debug: Print pointer info (first frame only)
+  static int frame_count = 0;
+  frame_count++;
   
-  checkErr = cudaPointerGetAttributes(&outputAttrs, d_output);
-  if (checkErr != cudaSuccess) {
-    fprintf(stderr, "ERROR: Output pointer validation failed: %s\n", cudaGetErrorString(checkErr));
-    cudaGetLastError(); // Clear error
-    acquirer->release(buf);
-    return NVDSPREPROCESS_RESOURCE_ERROR;
+  if (frame_count <= 3 || frame_count % 100 == 0) {
+    fprintf(stderr, "DEBUG[%d]: Input=%p, Output=%p\n", frame_count, (void*)d_input, (void*)d_output);
   }
 
-  bool success = launchTileExtractionKernel(
-      d_input, d_output, ctx->tile_config, ctx->stream);
-  if (!success) {
-    fprintf(stderr, "ERROR: Tile extraction kernel launch returned false\n");
+  // Launch CUDA kernel to convert UINT8 HWC -> FP16 NCHW with normalization
+  // Scale factor 1/255 = 0.00392156... to normalize 0-255 to 0.0-1.0
+  const float scale_factor = 0.0039215697906911373f;
+  const int width = 640;
+  const int height = 640;
+  const int num_tiles = 8;
+  
+  launchUint8ToFp16Kernel(d_input, d_output, width, height, num_tiles, scale_factor, ctx->stream);
+  
+  // Check for kernel errors
+  cudaError_t kernelErr = cudaGetLastError();
+  if (kernelErr != cudaSuccess) {
+    fprintf(stderr, "ERROR: Conversion kernel failed: %s\n", cudaGetErrorString(kernelErr));
     acquirer->release(buf);
-    return NVDSPREPROCESS_CUSTOM_TENSOR_FAILED;
+    return NVDSPREPROCESS_CUDA_ERROR;
   }
 
-  // Synchronize stream to ensure kernel completes before buffer is used
+  // Synchronize stream
   cudaError_t syncErr = cudaStreamSynchronize(ctx->stream);
   if (syncErr != cudaSuccess) {
     fprintf(stderr, "ERROR: Stream synchronization failed: %s\n", cudaGetErrorString(syncErr));
-    cudaGetLastError(); // Clear error
-    acquirer->release(buf);
-    return NVDSPREPROCESS_CUDA_ERROR;
-  }
-  
-  // Also synchronize device to catch context-wide issues early
-  cudaError_t deviceErr = cudaDeviceSynchronize();
-  if (deviceErr != cudaSuccess) {
-    fprintf(stderr, "ERROR: Device synchronization failed: %s\n", cudaGetErrorString(deviceErr));
-    cudaGetLastError(); // Clear error
+    cudaGetLastError();
     acquirer->release(buf);
     return NVDSPREPROCESS_CUDA_ERROR;
   }
 
-  tensorParam.params.network_input_shape[0] = ctx->tile_config.total_tiles;  // batch = 8
-  tensorParam.params.network_input_shape[1] = 3;  // channels = 3 (RGB)
-  tensorParam.params.network_input_shape[2] = ctx->tile_config.tile_height;  // height = 640
-  tensorParam.params.network_input_shape[3] = ctx->tile_config.tile_width;   // width = 640
+  // Report batch=8 to satisfy the engine
+  tensorParam.params.network_input_shape[0] = 8;  // batch = 8
+  tensorParam.params.network_input_shape[1] = 3;  // channels
+  tensorParam.params.network_input_shape[2] = 640;  // height
+  tensorParam.params.network_input_shape[3] = 640;  // width
   return NVDSPREPROCESS_SUCCESS;
 }

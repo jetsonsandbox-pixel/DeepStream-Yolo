@@ -10,6 +10,7 @@
 
 #include "nvdsinfer_tiled_config.h"
 #include <cuda_runtime.h>
+#include <cuda_fp16.h>
 #include <stdio.h>
 
 /**
@@ -63,38 +64,26 @@ __global__ void extractTilesKernel(
         // Handle edge tiles with zero padding if needed
         // Bounds check on BOTH tile boundaries AND input frame boundaries
         if (tile_x < actual_width && tile_y < actual_height &&
-            src_x < input_width && src_y < input_height) {
+            src_x < input_width && src_y < input_height &&
+            src_x >= 0 && src_y >= 0) {
             // Copy RGB channels from input to output
-            // Input is HWC (RGB interleaved), output is NCHW for batch [8, 3, 640, 640]
-            int src_idx = (src_y * input_width + src_x) * 3;  // RGB without pitch
+            // Input is HWC (RGB interleaved)
+            // Output is NCHW for TensorRT: [batch, channels, height, width]
+            int src_idx = (src_y * input_width + src_x) * 3;  // RGB interleaved
             
-            // NCHW layout: [batch, channels, height, width]
-            // For batch index = tile_idx, channel = 0/1/2, height = tile_y, width = tile_x
-            int dst_idx = tile_idx * 3 * pixels_per_tile +  // batch offset
-                         0 * pixels_per_tile + pixel_idx;   // R channel offset + pixel offset
-            output[dst_idx] = input[src_idx + 0];  // R
-            
-            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
-                     1 * pixels_per_tile + pixel_idx;       // G channel offset + pixel offset
-            output[dst_idx] = input[src_idx + 1];  // G
-            
-            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
-                     2 * pixels_per_tile + pixel_idx;       // B channel offset + pixel offset
-            output[dst_idx] = input[src_idx + 2];  // B
+            // NCHW layout: [batch, channels, height, width] = [8, 3, 640, 640]
+            // For each channel c: dst_idx = tile_idx * (C * H * W) + c * (H * W) + pixel_idx
+            int chw_offset = tile_idx * 3 * pixels_per_tile;  // offset to this tile
+            output[chw_offset + 0 * pixels_per_tile + pixel_idx] = input[src_idx + 0];  // R channel
+            output[chw_offset + 1 * pixels_per_tile + pixel_idx] = input[src_idx + 1];  // G channel
+            output[chw_offset + 2 * pixels_per_tile + pixel_idx] = input[src_idx + 2];  // B channel
         } else {
             // Pad with zeros for edge tiles or out-of-bounds pixels
             // NCHW layout padding
-            int dst_idx = tile_idx * 3 * pixels_per_tile +  // batch offset
-                         0 * pixels_per_tile + pixel_idx;   // R channel offset + pixel offset
-            output[dst_idx] = 0;  // R
-            
-            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
-                     1 * pixels_per_tile + pixel_idx;       // G channel offset + pixel offset
-            output[dst_idx] = 0;  // G
-            
-            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
-                     2 * pixels_per_tile + pixel_idx;       // B channel offset + pixel offset
-            output[dst_idx] = 0;  // B
+            int chw_offset = tile_idx * 3 * pixels_per_tile;
+            output[chw_offset + 0 * pixels_per_tile + pixel_idx] = 0;  // R
+            output[chw_offset + 1 * pixels_per_tile + pixel_idx] = 0;  // G
+            output[chw_offset + 2 * pixels_per_tile + pixel_idx] = 0;  // B
         }
     }
     
@@ -167,6 +156,111 @@ bool launchTileExtractionKernel(
 }
 
 /**
+ * CUDA kernel to convert UINT8 HWC input to FP16 NCHW output with normalization
+ * Duplicates the single input frame to fill batch=8
+ * 
+ * @param input Input frame (640x640 RGB HWC UINT8)
+ * @param output Output tensor (8x3x640x640 FP16 NCHW)
+ * @param width Frame width (640)
+ * @param height Frame height (640)
+ * @param num_tiles Number of output tiles (8)
+ * @param scale_factor Normalization factor (1/255)
+ */
+__global__ void uint8ToFp16Kernel(
+    const unsigned char* __restrict__ input,
+    __half* __restrict__ output,
+    int width,
+    int height,
+    int num_tiles,
+    float scale_factor)
+{
+    // Each thread handles one pixel across all tiles
+    int pixel_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_pixels = width * height;
+    
+    if (pixel_idx >= total_pixels) return;
+    
+    // Calculate input pixel position (HWC format)
+    int y = pixel_idx / width;
+    int x = pixel_idx % width;
+    int hwc_idx = (y * width + x) * 3;
+    
+    // Read RGB values once and convert to FP16 with normalization
+    __half r = __float2half(static_cast<float>(input[hwc_idx + 0]) * scale_factor);
+    __half g = __float2half(static_cast<float>(input[hwc_idx + 1]) * scale_factor);
+    __half b = __float2half(static_cast<float>(input[hwc_idx + 2]) * scale_factor);
+    
+    // Write to all 8 tiles in NCHW format
+    // Layout: [batch, channels, height, width] = [8, 3, 640, 640]
+    int pixels_per_channel = total_pixels;  // 640*640
+    int pixels_per_tile = 3 * pixels_per_channel;  // 3*640*640
+    
+    // Unroll loop for fixed 8 tiles
+    int tile_offset;
+    
+    tile_offset = 0 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 1 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 2 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 3 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 4 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 5 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 6 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+    
+    tile_offset = 7 * pixels_per_tile;
+    output[tile_offset + 0 * pixels_per_channel + pixel_idx] = r;
+    output[tile_offset + 1 * pixels_per_channel + pixel_idx] = g;
+    output[tile_offset + 2 * pixels_per_channel + pixel_idx] = b;
+}
+
+/**
+ * Host function to launch UINT8->FP16 conversion kernel
+ */
+extern "C"
+void launchUint8ToFp16Kernel(
+    const unsigned char* d_input,
+    __half* d_output,
+    int width,
+    int height,
+    int num_tiles,
+    float scale_factor,
+    cudaStream_t stream)
+{
+    int total_pixels = width * height;
+    int threads_per_block = 256;
+    int num_blocks = (total_pixels + threads_per_block - 1) / threads_per_block;
+    
+    uint8ToFp16Kernel<<<num_blocks, threads_per_block, 0, stream>>>(
+        d_input, d_output, width, height, num_tiles, scale_factor);
+}
+
+/**
  * Alternative simpler implementation for CPU-based tile extraction
  * Fallback when CUDA acceleration is not available
  * 
@@ -191,24 +285,26 @@ bool extractTilesCPU(
         int x_start, y_start, actual_width, actual_height;
         config.getTileInfo(tile_idx, x_start, y_start, actual_width, actual_height);
         
-        // Extract tile
+        // Extract tile in NCHW format
         for (int y = 0; y < config.tile_height; ++y) {
             for (int x = 0; x < config.tile_width; ++x) {
-                int dst_idx = (tile_idx * pixels_per_tile + y * config.tile_width + x) * 3;
+                int pixel_idx = y * config.tile_width + x;
+                int chw_offset = tile_idx * 3 * pixels_per_tile;
                 
                 if (x < actual_width && y < actual_height) {
                     int src_x = x_start + x;
                     int src_y = y_start + y;
                     int src_idx = (src_y * config.frame_width + src_x) * 3;
                     
-                    output[dst_idx + 0] = input[src_idx + 0];
-                    output[dst_idx + 1] = input[src_idx + 1];
-                    output[dst_idx + 2] = input[src_idx + 2];
+                    // NCHW output
+                    output[chw_offset + 0 * pixels_per_tile + pixel_idx] = input[src_idx + 0];
+                    output[chw_offset + 1 * pixels_per_tile + pixel_idx] = input[src_idx + 1];
+                    output[chw_offset + 2 * pixels_per_tile + pixel_idx] = input[src_idx + 2];
                 } else {
-                    // Pad with zeros
-                    output[dst_idx + 0] = 0;
-                    output[dst_idx + 1] = 0;
-                    output[dst_idx + 2] = 0;
+                    // Pad with zeros (NCHW)
+                    output[chw_offset + 0 * pixels_per_tile + pixel_idx] = 0;
+                    output[chw_offset + 1 * pixels_per_tile + pixel_idx] = 0;
+                    output[chw_offset + 2 * pixels_per_tile + pixel_idx] = 0;
                 }
             }
         }

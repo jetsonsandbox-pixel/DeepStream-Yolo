@@ -10,6 +10,9 @@ symmetric-padding=1
 # Uses custom preprocessing function to extract 8 tiles from each frame
 model-engine-file=model_b8_gpu0_fp16.engine
 
+# Use preprocessed tensor from nvdspreprocess instead of internal preprocessing
+input-tensor-from-meta=1
+
 #int8-calib-file=calib.table
 labelfile-path=labels.txt
 
