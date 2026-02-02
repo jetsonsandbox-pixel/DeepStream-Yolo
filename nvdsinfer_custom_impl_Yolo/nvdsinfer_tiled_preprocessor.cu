@@ -65,19 +65,36 @@ __global__ void extractTilesKernel(
         if (tile_x < actual_width && tile_y < actual_height &&
             src_x < input_width && src_y < input_height) {
             // Copy RGB channels from input to output
-            // Input is HWC (RGB interleaved), output is also HWC per tile
+            // Input is HWC (RGB interleaved), output is NCHW for batch [8, 3, 640, 640]
             int src_idx = (src_y * input_width + src_x) * 3;  // RGB without pitch
-            int dst_idx = (tile_idx * pixels_per_tile + pixel_idx) * 3;
             
-            output[dst_idx + 0] = input[src_idx + 0];  // R
-            output[dst_idx + 1] = input[src_idx + 1];  // G
-            output[dst_idx + 2] = input[src_idx + 2];  // B
+            // NCHW layout: [batch, channels, height, width]
+            // For batch index = tile_idx, channel = 0/1/2, height = tile_y, width = tile_x
+            int dst_idx = tile_idx * 3 * pixels_per_tile +  // batch offset
+                         0 * pixels_per_tile + pixel_idx;   // R channel offset + pixel offset
+            output[dst_idx] = input[src_idx + 0];  // R
+            
+            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
+                     1 * pixels_per_tile + pixel_idx;       // G channel offset + pixel offset
+            output[dst_idx] = input[src_idx + 1];  // G
+            
+            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
+                     2 * pixels_per_tile + pixel_idx;       // B channel offset + pixel offset
+            output[dst_idx] = input[src_idx + 2];  // B
         } else {
             // Pad with zeros for edge tiles or out-of-bounds pixels
-            int dst_idx = (tile_idx * pixels_per_tile + pixel_idx) * 3;
-            output[dst_idx + 0] = 0;
-            output[dst_idx + 1] = 0;
-            output[dst_idx + 2] = 0;
+            // NCHW layout padding
+            int dst_idx = tile_idx * 3 * pixels_per_tile +  // batch offset
+                         0 * pixels_per_tile + pixel_idx;   // R channel offset + pixel offset
+            output[dst_idx] = 0;  // R
+            
+            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
+                     1 * pixels_per_tile + pixel_idx;       // G channel offset + pixel offset
+            output[dst_idx] = 0;  // G
+            
+            dst_idx = tile_idx * 3 * pixels_per_tile +      // batch offset
+                     2 * pixels_per_tile + pixel_idx;       // B channel offset + pixel offset
+            output[dst_idx] = 0;  // B
         }
     }
     

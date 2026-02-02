@@ -171,6 +171,9 @@ extern "C" NvDsPreProcessStatus CustomTensorPreparation(
     return NVDSPREPROCESS_CUDA_ERROR;
   }
 
-  tensorParam.params.network_input_shape[0] = ctx->tile_config.total_tiles;
+  tensorParam.params.network_input_shape[0] = ctx->tile_config.total_tiles;  // batch = 8
+  tensorParam.params.network_input_shape[1] = 3;  // channels = 3 (RGB)
+  tensorParam.params.network_input_shape[2] = ctx->tile_config.tile_height;  // height = 640
+  tensorParam.params.network_input_shape[3] = ctx->tile_config.tile_width;   // width = 640
   return NVDSPREPROCESS_SUCCESS;
 }
