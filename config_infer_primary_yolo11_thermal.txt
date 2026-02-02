@@ -1,0 +1,33 @@
+[property]
+gpu-id=0
+net-scale-factor=0.0039215697906911373
+model-color-format=0
+onnx-file=/home/jet-nx8/DeepStream-Yolo/models-custom/yolo11n_thermal_2026-01-09_v1-9c_b1.onnx
+maintain-aspect-ratio=1
+symmetric-padding=1
+
+# Thermal camera: single frame processing (no tiling)
+model-engine-file=/home/jet-nx8/DeepStream-Yolo/model_thermal_b1_gpu0_fp16.engine
+labelfile-path=labels_thermal.txt
+
+# Single frame inference
+batch-size=1
+
+network-mode=2
+num-detected-classes=5
+interval=0
+
+gie-unique-id=2
+process-mode=1
+network-type=0
+cluster-mode=2
+workspace-size=2000
+
+parse-bbox-func-name=NvDsInferParseYolo
+custom-lib-path=nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so
+engine-create-func-name=NvDsInferYoloCudaEngineGet
+
+[class-attrs-all]
+nms-iou-threshold=0.45
+pre-cluster-threshold=0.25
+topk=300

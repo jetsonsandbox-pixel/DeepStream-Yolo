@@ -54,21 +54,21 @@ gpu-id=0
 live-source=0
 batch-size=1
 batched-push-timeout=40000
-width=1920
-height=1080
+width=640
+height=640
 enable-padding=0
 nvbuf-memory-type=0
 
-[pre-process]
-enable=1
-config-file=config_preprocess_tiling.txt
+#[pre-process]
+#enable=1
+#config-file=config_preprocess_tiling.txt
 
 [primary-gie]
 enable=1
 gpu-id=0
 gie-unique-id=1
 nvbuf-memory-type=0
-config-file=config_infer_primary_yolo11_tiling.txt
+config-file=config_infer_primary_yolo11_day_no_tiling.txt
 
 [tests]
 file-loop=0

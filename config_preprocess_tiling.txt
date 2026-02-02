@@ -24,7 +24,7 @@ network-color-format=0
 # FP16 to match the engine (0=FP32, 1=UINT8, 5=FP16)
 tensor-data-type=5
 tensor-name=input
-custom-lib-path=/home/jet-nx8/DeepStream-Yolo/libnvdsinfer_custom_impl_Yolo.so
+custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
 custom-tensor-preparation-function=CustomTensorPreparation
 
 [user-configs]
