@@ -28,7 +28,7 @@ class DualCameraPipeline:
         """Build daylight CSI branch with tiling"""
         # Source: CSI camera
         src = Gst.ElementFactory.make("nvarguscamerasrc", "daylight-src")
-        src.set_property("sensor-id", 0)
+        src.set_property("sensor-id", 2)
         
         # Caps: 1920x1080@30
         caps = Gst.Caps.from_string(
@@ -78,7 +78,7 @@ class DualCameraPipeline:
         
         # Sink - use fakesink to avoid GPU display conflicts
         # Multiple sinks can't safely share GPU memory
-        sink = Gst.ElementFactory.make("fakesink", "daylight-sink")
+        sink = Gst.ElementFactory.make("nveglglessink", "daylight-sink")
         sink.set_property("sync", False)
         
         # Add elements
@@ -109,7 +109,7 @@ class DualCameraPipeline:
         """Build thermal USB branch without tiling"""
         # Source: USB camera (thermal)
         src = Gst.ElementFactory.make("v4l2src", "thermal-src")
-        src.set_property("device", "/dev/video1")
+        src.set_property("device", "/dev/video0")
 
         # Caps: native thermal resolution and format
         caps = Gst.Caps.from_string(
@@ -165,7 +165,7 @@ class DualCameraPipeline:
         
         # Sink - use fakesink to avoid GPU display conflicts
         # Multiple sinks can't safely share GPU memory
-        sink = Gst.ElementFactory.make("fakesink", "thermal-sink")
+        sink = Gst.ElementFactory.make("nveglglessink", "thermal-sink")
         sink.set_property("sync", False)
         
         # Add elements
