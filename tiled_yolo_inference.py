@@ -460,9 +460,6 @@ class TensorRTInference:
 # DETECTION MERGING (uses C++ NMS library)
 # ============================================================================
 
-import ctypes
-from pathlib import Path
-
 class DetectionMerger:
     """Merge tiled detections using C++ NMS library for performance"""
     
@@ -647,7 +644,7 @@ class DetectionMerger:
             all_detections.append(detections_copy)
         
         if len(all_detections) == 0:
-            return np.array([])
+            return np.zeros((0, 6), dtype=np.float32)
         
         # Concatenate all detections
         merged = np.vstack(all_detections)
@@ -898,14 +895,14 @@ class TiledYOLOInference:
             Detections (N, 6) [x1, y1, x2, y2, conf, class_id]
         """
         if len(output) == 0:
-            return np.array([])
+            return np.zeros((0, 6), dtype=np.float32)
         
         # Filter by confidence threshold
         confidences = output[:, 4]
         valid_mask = confidences >= conf_threshold
         
         if not np.any(valid_mask):
-            return np.array([])
+            return np.zeros((0, 6), dtype=np.float32)
         
         detections = output[valid_mask]
         
