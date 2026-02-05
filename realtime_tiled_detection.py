@@ -76,17 +76,77 @@ class VideoProcessor:
             return []
     
     def _open_video_source(self):
-        """Open video file or camera"""
+        """Open video file or camera with Jetson-optimized pipelines"""
         # Try to convert to int for camera index
         try:
             source = int(self.input_source)
+            is_camera = True
             print(f"[VideoProcessor] Opening camera {source}")
         except ValueError:
             source = self.input_source
+            is_camera = False
             print(f"[VideoProcessor] Opening video file: {source}")
         
-        cap = cv2.VideoCapture(source)
-        if not cap.isOpened():
+        cap = None
+        
+        if is_camera:
+            # Try different camera pipelines for Jetson
+            pipelines = [
+                # CSI camera with nvarguscamerasrc (Jetson native)
+                f"nvarguscamerasrc sensor-id={source} ! "
+                f"video/x-raw(memory:NVMM),width=1920,height=1080,framerate=30/1,format=NV12 ! "
+                f"nvvidconv ! video/x-raw,format=BGRx ! videoconvert ! video/x-raw,format=BGR ! "
+                f"appsink drop=1",
+                
+                # USB camera with v4l2src (lower resolution for reliability)
+                f"v4l2src device=/dev/video{source} ! "
+                f"video/x-raw,width=1280,height=720,framerate=30/1 ! "
+                f"videoconvert ! video/x-raw,format=BGR ! appsink drop=1",
+                
+                # USB camera with auto-negotiation
+                f"v4l2src device=/dev/video{source} ! videoconvert ! "
+                f"video/x-raw,format=BGR ! appsink drop=1",
+            ]
+            
+            for i, pipeline in enumerate(pipelines):
+                print(f"[VideoProcessor] Trying pipeline {i+1}/{len(pipelines)}...")
+                cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+                if cap.isOpened():
+                    # Test read to ensure it actually works
+                    ret, test_frame = cap.read()
+                    if ret and test_frame is not None:
+                        print(f"[VideoProcessor] ✓ Pipeline {i+1} working")
+                        break
+                    else:
+                        cap.release()
+                        cap = None
+                else:
+                    cap = None
+            
+            # Fallback to direct V4L2 with explicit backend
+            if cap is None or not cap.isOpened():
+                print(f"[VideoProcessor] Trying direct V4L2 capture...")
+                cap = cv2.VideoCapture(source, cv2.CAP_V4L2)
+                if cap.isOpened():
+                    # Set lower resolution for reliability
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    cap.set(cv2.CAP_PROP_FPS, 30)
+        else:
+            # Video file - use GStreamer for hardware decoding on Jetson
+            if source.endswith(('.mp4', '.avi', '.mkv', '.mov')):
+                gst_pipeline = (
+                    f"filesrc location={source} ! decodebin ! "
+                    f"nvvidconv ! video/x-raw,format=BGRx ! "
+                    f"videoconvert ! video/x-raw,format=BGR ! appsink"
+                )
+                cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+            
+            # Fallback to default OpenCV
+            if cap is None or not cap.isOpened():
+                cap = cv2.VideoCapture(source)
+        
+        if cap is None or not cap.isOpened():
             raise RuntimeError(f"Failed to open video source: {source}")
         
         # Get video properties
@@ -321,7 +381,7 @@ def main():
     )
     
     parser.add_argument('--engine', type=str, 
-                       default='model_b8_gpu0_fp32.engine',
+                       default='model_day_b8_gpu0_fp16.engine',
                        help='Path to TensorRT engine file')
     
     parser.add_argument('--input', type=str,
