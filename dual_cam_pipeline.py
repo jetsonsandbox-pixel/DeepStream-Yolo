@@ -28,7 +28,7 @@ class DualCameraPipeline:
         """Build daylight CSI branch with tiling"""
         # Source: CSI camera
         src = Gst.ElementFactory.make("nvarguscamerasrc", "daylight-src")
-        src.set_property("sensor-id", 2)
+        src.set_property("sensor-id", 0)
         
         # Caps: 1920x1080@30
         caps = Gst.Caps.from_string(
@@ -109,7 +109,7 @@ class DualCameraPipeline:
         """Build thermal USB branch without tiling"""
         # Source: USB camera (thermal)
         src = Gst.ElementFactory.make("v4l2src", "thermal-src")
-        src.set_property("device", "/dev/video0")
+        src.set_property("device", "/dev/video1")
 
         # Caps: native thermal resolution and format
         caps = Gst.Caps.from_string(
