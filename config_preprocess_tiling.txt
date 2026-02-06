@@ -19,9 +19,9 @@ tensor-buf-pool-size=4
 # Tiled batch: 8 x 3 x 640 x 640
 network-input-shape=8;3;640;640
 network-color-format=0
-# FP32 to match engine input datatype
-tensor-data-type=0
-tensor-name=images
+# FP16 to match model_day_b8_gpu0_fp16.engine input datatype
+tensor-data-type=1
+tensor-name=input
 custom-lib-path=/opt/nvidia/deepstream/deepstream/lib/gst-plugins/libcustom2d_preprocess.so
 custom-tensor-preparation-function=CustomTensorPreparation
 
@@ -30,17 +30,10 @@ custom-tensor-preparation-function=CustomTensorPreparation
 pixel-normalization-factor=0.003921568
 offsets=0;0;0
 
-# Tile configuration
-tiling-mode=1
-tile-width=640
-tile-height=640
-tile-overlap=96
-frame-width=1920
-frame-height=1080
-
 [group-0]
 src-ids=0
-dest-crop-rect-user-meta=1
-custom-input-transformation-function=CustomTransformation
 process-on-roi=1
+# Attach ROI crop meta so nvinfer can map detections back to full frame
+dest-crop-rect-user-meta=1
+# 8 ROI tiles (4x2 grid with overlap). nvdspreprocess will scale each ROI to 640x640.
 roi-params-src-0=0;0;640;640;544;0;640;640;1088;0;640;640;1632;0;288;640;0;544;640;536;544;544;640;536;1088;544;640;536;1632;544;288;536

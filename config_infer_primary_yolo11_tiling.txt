@@ -8,7 +8,7 @@ symmetric-padding=1
 
 # TILING MODE with Custom Preprocessing
 # Uses custom preprocessing function to extract 8 tiles from each frame
-model-engine-file=model_b8_gpu0_fp16.engine
+model-engine-file=model_day_b8_gpu0_fp16.engine
 
 # Use preprocessed tensor from nvdspreprocess instead of internal preprocessing
 input-tensor-from-meta=1
