@@ -8,6 +8,8 @@
 #include <string>
 #include <unordered_map>
 
+#include <gst/gst.h>
+
 #include "nvbufsurface.h"
 #include "nvdsinfer_tiled_config.h"
 #include "nvdspreprocess_interface.h"
@@ -17,20 +19,36 @@
 // This prevents race conditions when dual cameras run simultaneously
 static std::mutex g_cuda_mutex;
 
-// Forward declaration of CUDA kernel for UINT8->FP16 conversion
-extern "C" void launchUint8ToFp16Kernel(
-    const unsigned char* d_input,
-    __half* d_output,
-    int width,
-    int height,
-    int num_tiles,
-    float scale_factor,
-    cudaStream_t stream);
+// Forward declaration of CUDA kernel for tiled extraction to FP16
+extern "C" bool launchTileExtractionKernel(
+  const unsigned char* d_input,
+  __half* d_output,
+  const TileConfig& config,
+  int input_pitch,
+  float scale_factor,
+  cudaStream_t stream);
 
 struct CustomCtx {
   TileConfig tile_config;
   cudaStream_t stream = nullptr;
+  unsigned char* d_input_staging = nullptr;
+  size_t staging_size = 0;
+  NvBufSurface* last_out_surf = nullptr;
 };
+
+static NvBufSurface* getNvBufSurfaceFromGstBuffer(GstBuffer* inbuf) {
+  if (!inbuf) {
+    return nullptr;
+  }
+  GstMapInfo map_info = GST_MAP_INFO_INIT;
+  if (!gst_buffer_map(inbuf, &map_info, GST_MAP_READ)) {
+    fprintf(stderr, "ERROR: gst_buffer_map failed for NvBufSurface access\n");
+    return nullptr;
+  }
+  auto* surf = reinterpret_cast<NvBufSurface*>(map_info.data);
+  gst_buffer_unmap(inbuf, &map_info);
+  return surf;
+}
 
 namespace {
 
@@ -86,6 +104,18 @@ extern "C" CustomCtx* initLib(CustomInitParams initparams) {
     return nullptr;
   }
 
+  cudaSetDevice(0);
+
+  ctx->staging_size = 0;
+  if (ctx->staging_size > 0) {
+    cudaError_t allocErr = cudaMalloc(reinterpret_cast<void**>(&ctx->d_input_staging), ctx->staging_size);
+    if (allocErr != cudaSuccess) {
+      fprintf(stderr, "ERROR: Failed to allocate staging buffer: %s\n", cudaGetErrorString(allocErr));
+      delete ctx;
+      return nullptr;
+    }
+  }
+
   cudaError_t cudaErr = cudaStreamCreateWithFlags(&ctx->stream, cudaStreamDefault);
   if (cudaErr != cudaSuccess) {
     fprintf(stderr, "ERROR: Failed to create CUDA stream: %s\n", cudaGetErrorString(cudaErr));
@@ -102,10 +132,33 @@ extern "C" void deInitLib(CustomCtx* ctx) {
   if (!ctx) {
     return;
   }
+  if (ctx->d_input_staging) {
+    cudaFree(ctx->d_input_staging);
+  }
   if (ctx->stream) {
     cudaStreamDestroy(ctx->stream);
   }
   delete ctx;
+}
+
+extern "C" NvDsPreProcessStatus CustomTransformation(NvBufSurface *in_surf,
+                                                    NvBufSurface *out_surf,
+                                                    CustomTransformParams &params) {
+  NvBufSurfTransform_Error err;
+
+  err = NvBufSurfTransformSetSessionParams(&params.transform_config_params);
+  if (err != NvBufSurfTransformError_Success) {
+    fprintf(stderr, "NvBufSurfTransformSetSessionParams failed with error %d\n", err);
+    return NVDSPREPROCESS_CUSTOM_TRANSFORMATION_FAILED;
+  }
+
+  err = NvBufSurfTransform(in_surf, out_surf, &params.transform_params);
+  if (err != NvBufSurfTransformError_Success) {
+    fprintf(stderr, "NvBufSurfTransform failed with error %d\n", err);
+    return NVDSPREPROCESS_CUSTOM_TRANSFORMATION_FAILED;
+  }
+
+  return NVDSPREPROCESS_SUCCESS;
 }
 
 extern "C" NvDsPreProcessStatus CustomTensorPreparation(
@@ -135,17 +188,92 @@ extern "C" NvDsPreProcessStatus CustomTensorPreparation(
   }
 
   const NvDsPreProcessUnit& unit = batch->units[0];
+  uint32_t pitch = batch->pitch ? batch->pitch : (ctx->tile_config.frame_width * 3);
   
-  // converted_frame_ptr is 640x640 RGB HWC UINT8 (scaled by nvdspreprocess)
-  // We need to convert to FP16 NCHW and duplicate 8 times for batch=8 engine
+  // converted_frame_ptr is full-frame RGB HWC UINT8 (scaled by nvdspreprocess)
+  // We need to extract 8 tiles and convert to FP16 NCHW for batch=8 engine
   if (!unit.converted_frame_ptr) {
     fprintf(stderr, "ERROR: converted_frame_ptr is NULL\n");
     acquirer->release(buf);
     return NVDSPREPROCESS_INVALID_PARAMS;
   }
 
-  const unsigned char* d_input =
-      reinterpret_cast<const unsigned char*>(unit.converted_frame_ptr);
+  const unsigned char* d_input = nullptr;
+  bool input_on_device = false;
+  cudaPointerAttributes attr;
+  cudaError_t attrErr = cudaPointerGetAttributes(&attr, unit.converted_frame_ptr);
+  if (attrErr == cudaSuccess) {
+#if CUDART_VERSION >= 10000
+    input_on_device = (attr.type == cudaMemoryTypeDevice || attr.type == cudaMemoryTypeManaged);
+#else
+    input_on_device = (attr.memoryType == cudaMemoryTypeDevice);
+#endif
+  } else {
+    cudaGetLastError();
+  }
+
+  if (input_on_device) {
+    d_input = reinterpret_cast<const unsigned char*>(unit.converted_frame_ptr);
+  } else {
+    size_t required_size = static_cast<size_t>(pitch) * ctx->tile_config.frame_height;
+    if (ctx->staging_size < required_size) {
+      if (ctx->d_input_staging) {
+        cudaFree(ctx->d_input_staging);
+      }
+      ctx->staging_size = required_size;
+      cudaError_t allocErr = cudaMalloc(reinterpret_cast<void**>(&ctx->d_input_staging), ctx->staging_size);
+      if (allocErr != cudaSuccess) {
+        fprintf(stderr, "ERROR: Failed to allocate staging buffer: %s\n", cudaGetErrorString(allocErr));
+        acquirer->release(buf);
+        return NVDSPREPROCESS_RESOURCE_ERROR;
+      }
+    }
+    if (!ctx->d_input_staging || ctx->staging_size == 0) {
+      fprintf(stderr, "ERROR: Staging buffer not available for host input\n");
+      acquirer->release(buf);
+      return NVDSPREPROCESS_RESOURCE_ERROR;
+    }
+    const void* host_src = unit.converted_frame_ptr;
+    NvBufSurface *surf = nullptr;
+
+    if (!input_on_device && batch->converted_buf) {
+      surf = getNvBufSurfaceFromGstBuffer(batch->converted_buf);
+    }
+
+    if (surf) {
+      if (NvBufSurfaceMap(surf, 0, 0, NVBUF_MAP_READ) == 0) {
+        NvBufSurfaceSyncForCpu(surf, 0, 0);
+        host_src = surf->surfaceList[0].mappedAddr.addr[0];
+        pitch = surf->surfaceList[0].planeParams.pitch[0];
+        required_size = static_cast<size_t>(pitch) * ctx->tile_config.frame_height;
+      }
+    }
+
+    if (!host_src) {
+      fprintf(stderr, "ERROR: No valid source pointer for tiling\n");
+      acquirer->release(buf);
+      return NVDSPREPROCESS_RESOURCE_ERROR;
+    }
+
+    cudaError_t copyErr = cudaMemcpyAsync(
+        ctx->d_input_staging,
+        host_src,
+        required_size,
+        cudaMemcpyDefault,
+        ctx->stream);
+    if (copyErr != cudaSuccess) {
+      fprintf(stderr, "ERROR: Failed to copy input to staging buffer: %s\n", cudaGetErrorString(copyErr));
+      if (surf) {
+        NvBufSurfaceUnMap(surf, 0, 0);
+      }
+      acquirer->release(buf);
+      return NVDSPREPROCESS_CUDA_ERROR;
+    }
+    if (surf) {
+      NvBufSurfaceUnMap(surf, 0, 0);
+    }
+    d_input = ctx->d_input_staging;
+  }
   __half* d_output = reinterpret_cast<__half*>(buf->memory_ptr);
   
   // Debug: Print pointer info (first frame only)
@@ -156,14 +284,15 @@ extern "C" NvDsPreProcessStatus CustomTensorPreparation(
     fprintf(stderr, "DEBUG[%d]: Input=%p, Output=%p\n", frame_count, (void*)d_input, (void*)d_output);
   }
 
-  // Launch CUDA kernel to convert UINT8 HWC -> FP16 NCHW with normalization
+  // Launch CUDA kernel to extract tiles and convert to FP16 NCHW with normalization
   // Scale factor 1/255 = 0.00392156... to normalize 0-255 to 0.0-1.0
   const float scale_factor = 0.0039215697906911373f;
-  const int width = 640;
-  const int height = 640;
-  const int num_tiles = 8;
-  
-  launchUint8ToFp16Kernel(d_input, d_output, width, height, num_tiles, scale_factor, ctx->stream);
+
+  if (!launchTileExtractionKernel(d_input, d_output, ctx->tile_config, static_cast<int>(pitch), scale_factor, ctx->stream)) {
+    fprintf(stderr, "ERROR: Tile extraction kernel failed to launch\n");
+    acquirer->release(buf);
+    return NVDSPREPROCESS_CUDA_ERROR;
+  }
   
   // Check for kernel errors
   cudaError_t kernelErr = cudaGetLastError();

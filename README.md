@@ -329,6 +329,26 @@ force-implicit-batch-dim=1
 deepstream-app -c deepstream_app_config.txt
 ```
 
+#### Dual camera (separate processes)
+
+To avoid GPU/OSD contention, run daylight and thermal in separate processes:
+
+```
+./run_daylight.sh
+```
+
+In another terminal:
+
+```
+./run_thermal.sh
+```
+
+Or launch both from one script:
+
+```
+./run_split.sh
+```
+
 **NOTE**: The TensorRT engine file may take a very long time to generate (sometimes more than 10 minutes).
 
 **NOTE**: If you want to use YOLOv2 or YOLOv2-Tiny models, change the `deepstream_app_config.txt` file before run it

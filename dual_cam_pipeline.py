@@ -6,6 +6,7 @@ Dual Camera DeepStream Pipeline
 """
 
 import sys
+import os
 import time
 import gi
 gi.require_version('Gst', '1.0')
@@ -16,6 +17,10 @@ class DualCameraPipeline:
         Gst.init(None)
         self.pipeline = Gst.Pipeline.new("dual-camera-pipeline")
         self.loop = GLib.MainLoop()
+
+        # Enable/disable branches via env vars (1=on, 0=off)
+        self.enable_daylight = os.getenv("ENABLE_DAYLIGHT", "0") != "0"
+        self.enable_thermal = os.getenv("ENABLE_THERMAL", "1") != "0"
         
         # FPS tracking
         self.daylight_frame_count = 0
@@ -38,6 +43,10 @@ class DualCameraPipeline:
         caps_filter = Gst.ElementFactory.make("capsfilter", "daylight-caps")
         caps_filter.set_property("caps", caps)
         
+        # Flip upside down using nvvideoconvert
+        flip = Gst.ElementFactory.make("nvvideoconvert", "daylight-flip")
+        flip.set_property("flip-method", 2)  # 2 = 180 degrees
+
         # Stream muxer
         mux = Gst.ElementFactory.make("nvstreammux", "daylight-mux")
         mux.set_property("width", 1920)
@@ -80,17 +89,21 @@ class DualCameraPipeline:
         # Multiple sinks can't safely share GPU memory
         sink = Gst.ElementFactory.make("nveglglessink", "daylight-sink")
         sink.set_property("sync", False)
+        # Decrease window size by 40% (show 60% of original 1920x1080)
+        sink.set_property("window-width", 1152)
+        sink.set_property("window-height", 648)
         
         # Add elements
-        elements = [src, caps_filter, mux, preprocess, preprocess_queue, infer, infer_queue, osd, sink]
+        elements = [src, caps_filter, flip, mux, preprocess, preprocess_queue, infer, infer_queue, osd, sink]
         for elem in elements:
             self.pipeline.add(elem)
         
         # Link elements
         src.link(caps_filter)
+        caps_filter.link(flip)
         
-        # Link caps to mux sink pad
-        src_pad = caps_filter.get_static_pad("src")
+        # Link flip to mux sink pad
+        src_pad = flip.get_static_pad("src")
         sink_pad = mux.get_request_pad("sink_0")
         src_pad.link(sink_pad)
         
@@ -164,7 +177,7 @@ class DualCameraPipeline:
         osd_sink_pad.add_probe(Gst.PadProbeType.BUFFER, self.thermal_fps_probe, None)
         
         # Sink - use fakesink to avoid GPU display conflicts
-        # Multiple sinks can't safely share GPU memory
+        # Multiple EGL sinks can't safely share GPU memory on Jetson
         sink = Gst.ElementFactory.make("nveglglessink", "thermal-sink")
         sink.set_property("sync", False)
         
@@ -215,6 +228,11 @@ class DualCameraPipeline:
             self.thermal_start_time = time.time()
         
         self.thermal_frame_count += 1
+        # Print FPS every 5 seconds (also when daylight is disabled)
+        current_time = time.time()
+        if current_time - self.last_fps_print >= 5.0:
+            self.print_fps()
+            self.last_fps_print = current_time
         return Gst.PadProbeReturn.OK
     
     def print_fps(self):
@@ -233,7 +251,13 @@ class DualCameraPipeline:
         else:
             thermal_fps = 0
         
-        print(f"\rDaylight: {daylight_fps:.1f} FPS | Thermal: {thermal_fps:.1f} FPS", end="", flush=True)
+        parts = []
+        if self.enable_daylight:
+            parts.append(f"Daylight: {daylight_fps:.1f} FPS")
+        if self.enable_thermal:
+            parts.append(f"Thermal: {thermal_fps:.1f} FPS")
+        if parts:
+            print(" | ".join(parts), flush=True)
     
     def bus_call(self, bus, message, loop):
         """Handle bus messages"""
@@ -249,15 +273,25 @@ class DualCameraPipeline:
     
     def run(self):
         """Build and run pipeline"""
-        print("Building daylight branch...")
-        if not self.build_daylight_branch():
-            print("Failed to build daylight branch")
+        if not self.enable_daylight and not self.enable_thermal:
+            print("No branches enabled. Set ENABLE_DAYLIGHT=1 or ENABLE_THERMAL=1.")
             return False
+
+        if self.enable_daylight:
+            print("Building daylight branch...")
+            if not self.build_daylight_branch():
+                print("Failed to build daylight branch")
+                return False
+        else:
+            print("Daylight branch disabled")
         
-        print("Building thermal branch...")
-        if not self.build_thermal_branch():
-            print("Failed to build thermal branch")
-            return False
+        if self.enable_thermal:
+            print("Building thermal branch...")
+            if not self.build_thermal_branch():
+                print("Failed to build thermal branch")
+                return False
+        else:
+            print("Thermal branch disabled")
         
         # Setup bus watch
         bus = self.pipeline.get_bus()

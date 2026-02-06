@@ -21,16 +21,18 @@
  * @param output Output tiles buffer (8 tiles concatenated)
  * @param config Tile configuration
  */
-__global__ void extractTilesKernel(
+__global__ void extractTilesKernelFp16(
     const unsigned char* input,
-    unsigned char* output,
+    __half* output,
     int input_width,
     int input_height,
+    int input_pitch,
     int tile_width,
     int tile_height,
     int stride,
     int tiles_x,
-    int tiles_y)
+    int tiles_y,
+    float scale_factor)
 {
     // Each block processes one tile
     int tile_idx = blockIdx.x;
@@ -66,24 +68,24 @@ __global__ void extractTilesKernel(
         if (tile_x < actual_width && tile_y < actual_height &&
             src_x < input_width && src_y < input_height &&
             src_x >= 0 && src_y >= 0) {
-            // Copy RGB channels from input to output
+            // Copy RGB channels from input to output (normalize to FP16)
             // Input is HWC (RGB interleaved)
             // Output is NCHW for TensorRT: [batch, channels, height, width]
-            int src_idx = (src_y * input_width + src_x) * 3;  // RGB interleaved
+            int src_idx = src_y * input_pitch + src_x * 3;  // RGB interleaved, pitch in bytes
             
             // NCHW layout: [batch, channels, height, width] = [8, 3, 640, 640]
             // For each channel c: dst_idx = tile_idx * (C * H * W) + c * (H * W) + pixel_idx
             int chw_offset = tile_idx * 3 * pixels_per_tile;  // offset to this tile
-            output[chw_offset + 0 * pixels_per_tile + pixel_idx] = input[src_idx + 0];  // R channel
-            output[chw_offset + 1 * pixels_per_tile + pixel_idx] = input[src_idx + 1];  // G channel
-            output[chw_offset + 2 * pixels_per_tile + pixel_idx] = input[src_idx + 2];  // B channel
+            output[chw_offset + 0 * pixels_per_tile + pixel_idx] = __float2half(static_cast<float>(input[src_idx + 0]) * scale_factor);  // R
+            output[chw_offset + 1 * pixels_per_tile + pixel_idx] = __float2half(static_cast<float>(input[src_idx + 1]) * scale_factor);  // G
+            output[chw_offset + 2 * pixels_per_tile + pixel_idx] = __float2half(static_cast<float>(input[src_idx + 2]) * scale_factor);  // B
         } else {
             // Pad with zeros for edge tiles or out-of-bounds pixels
             // NCHW layout padding
             int chw_offset = tile_idx * 3 * pixels_per_tile;
-            output[chw_offset + 0 * pixels_per_tile + pixel_idx] = 0;  // R
-            output[chw_offset + 1 * pixels_per_tile + pixel_idx] = 0;  // G
-            output[chw_offset + 2 * pixels_per_tile + pixel_idx] = 0;  // B
+            output[chw_offset + 0 * pixels_per_tile + pixel_idx] = __float2half(0.0f);  // R
+            output[chw_offset + 1 * pixels_per_tile + pixel_idx] = __float2half(0.0f);  // G
+            output[chw_offset + 2 * pixels_per_tile + pixel_idx] = __float2half(0.0f);  // B
         }
     }
     
@@ -103,8 +105,10 @@ __global__ void extractTilesKernel(
 extern "C"
 bool launchTileExtractionKernel(
     const unsigned char* d_input,
-    unsigned char* d_output,
+    __half* d_output,
     const TileConfig& config,
+    int input_pitch,
+    float scale_factor,
     cudaStream_t stream = 0)
 {
     if (!d_input || !d_output) {
@@ -114,7 +118,7 @@ bool launchTileExtractionKernel(
     
     // Validate input buffer size expectations
     size_t expected_input_size = config.frame_width * config.frame_height * 3;
-    size_t expected_output_size = config.total_tiles * config.tile_width * config.tile_height * 3;
+    size_t expected_output_size = config.total_tiles * config.tile_width * config.tile_height * 3 * sizeof(__half);
     
     if (expected_input_size == 0 || expected_output_size == 0) {
         fprintf(stderr, "ERROR: Invalid buffer size calculation (input=%zu, output=%zu)\n",
@@ -131,16 +135,18 @@ bool launchTileExtractionKernel(
     dim3 block(threads_per_block);
     
     // Launch kernel
-    extractTilesKernel<<<grid, block, 0, stream>>>(
+    extractTilesKernelFp16<<<grid, block, 0, stream>>>(
         d_input,
         d_output,
         config.frame_width,
         config.frame_height,
+        input_pitch,
         config.tile_width,
         config.tile_height,
         config.stride,
         config.tiles_x,
-        config.tiles_y
+        config.tiles_y,
+        scale_factor
     );
     
     // Check for kernel launch errors immediately

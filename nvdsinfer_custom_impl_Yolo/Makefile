@@ -48,6 +48,7 @@ NVCC:=/usr/local/cuda-$(CUDA_VER)/bin/nvcc
 
 GST_CFLAGS:= $(shell pkg-config --cflags gstreamer-1.0)
 GST_CFLAGS_NO_PTHREAD:= $(filter-out -pthread,$(GST_CFLAGS))
+GST_LIBS:= $(shell pkg-config --libs gstreamer-1.0)
 CFLAGS:= -Wall -std=c++11 -shared -fPIC -Wno-error=deprecated-declarations
 PREPROCESS_INCLUDE:= -I/opt/nvidia/deepstream/deepstream/sources/gst-plugins/gst-nvdspreprocess/include -I/opt/nvidia/deepstream/deepstream/sources/gst-plugins/gst-nvdspreprocess/nvdspreprocess_lib
 CFLAGS+= $(GST_CFLAGS) -I/opt/nvidia/deepstream/deepstream/sources/includes $(PREPROCESS_INCLUDE) -I/usr/local/cuda-$(CUDA_VER)/include
@@ -70,7 +71,7 @@ ifeq ($(shell ldconfig -p | grep -q libnvparsers && echo 1 || echo 0), 1)
 	LIBS+= -lnvparsers
 endif
 
-LIBS+= -lnvinfer_plugin -lnvinfer -lnvonnxparser -L/usr/local/cuda-$(CUDA_VER)/lib64 -lcudart -lcublas -lstdc++fs
+LIBS+= -L/opt/nvidia/deepstream/deepstream/lib -lnvinfer_plugin -lnvinfer -lnvonnxparser -lnvbufsurface -lnvbufsurftransform $(GST_LIBS) -L/usr/local/cuda-$(CUDA_VER)/lib64 -lcudart -lcublas -lstdc++fs
 LFLAGS:= -shared -Wl,--start-group $(LIBS) -Wl,--end-group
 
 INCS:= $(wildcard layers/*.h)
