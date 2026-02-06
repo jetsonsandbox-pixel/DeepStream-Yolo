@@ -19,8 +19,8 @@ tensor-buf-pool-size=4
 # Tiled batch: 8 x 3 x 640 x 640
 network-input-shape=8;3;640;640
 network-color-format=0
-# FP16 to match model_day_b8_gpu0_fp16.engine input datatype
-tensor-data-type=1
+# FP32 to match model_day_b8_gpu0_fp32.engine input datatype
+tensor-data-type=0
 tensor-name=input
 custom-lib-path=/opt/nvidia/deepstream/deepstream/lib/gst-plugins/libcustom2d_preprocess.so
 custom-tensor-preparation-function=CustomTensorPreparation

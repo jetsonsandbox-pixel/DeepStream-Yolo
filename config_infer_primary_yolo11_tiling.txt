@@ -8,7 +8,7 @@ symmetric-padding=1
 
 # TILING MODE with Custom Preprocessing
 # Uses custom preprocessing function to extract 8 tiles from each frame
-model-engine-file=model_day_b8_gpu0_fp16.engine
+model-engine-file=model_day_b8_gpu0_fp32.engine
 
 # Use preprocessed tensor from nvdspreprocess instead of internal preprocessing
 input-tensor-from-meta=1
@@ -19,7 +19,7 @@ labelfile-path=labels.txt
 # Batch size = number of tiles (8 tiles from 4x2 grid)
 batch-size=8
 
-network-mode=2
+network-mode=0
 num-detected-classes=8
 
 # Frame interval: set to 0 for processing every frame with tiling
@@ -83,10 +83,11 @@ engine-create-func-name=NvDsInferYoloCudaEngineGet
 # NMS threshold for removing duplicate detections in tile overlap regions
 # Higher values (0.5-0.6) = more aggressive duplicate removal
 # Lower values (0.4-0.45) = preserve more borderline detections
-nms-iou-threshold=0.45
+nms-iou-threshold=0.40
 
 # Confidence threshold for initial detection filtering
-pre-cluster-threshold=0.25
+pre-cluster-threshold=0.60
+post-cluster-threshold=0.60
 
 # Maximum detections to keep per tile (before NMS merging)
-topk=300
+topk=50

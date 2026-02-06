@@ -81,6 +81,10 @@ decodeTensorYolo(const float* output, const uint& outputSize, const uint& netW, 
     float maxProb = output[b * 6 + 4];
     int maxIndex = (int) output[b * 6 + 5];
 
+    if (maxIndex < 0 || static_cast<size_t>(maxIndex) >= preclusterThreshold.size()) {
+      continue;
+    }
+
     if (maxProb < preclusterThreshold[maxIndex]) {
       continue;
     }
@@ -89,6 +93,14 @@ decodeTensorYolo(const float* output, const uint& outputSize, const uint& netW, 
     float by1 = output[b * 6 + 1];
     float bx2 = output[b * 6 + 2];
     float by2 = output[b * 6 + 3];
+
+    // If output is normalized (0-1), scale to network input size
+    if (bx2 <= 1.5f && by2 <= 1.5f) {
+      bx1 *= netW;
+      bx2 *= netW;
+      by1 *= netH;
+      by2 *= netH;
+    }
 
     addBBoxProposal(bx1, by1, bx2, by2, netW, netH, maxIndex, maxProb, binfo);
   }
@@ -109,7 +121,21 @@ NvDsInferParseCustomYolo(std::vector<NvDsInferLayerInfo> const& outputLayersInfo
   std::vector<NvDsInferParseObjectInfo> objects;
 
   const NvDsInferLayerInfo& output = outputLayersInfo[0];
-  const uint outputSize = output.inferDims.d[0];
+
+  uint batch = 1;
+  uint outputSize = 0;
+
+  if (output.inferDims.numDims == 3 && output.inferDims.d[2] == 6) {
+    batch = output.inferDims.d[0];
+    outputSize = output.inferDims.d[1];
+  } else if (output.inferDims.numDims == 2 && output.inferDims.d[1] == 6) {
+    outputSize = output.inferDims.d[0];
+  } else if (output.inferDims.numDims == 1 && output.inferDims.d[0] % 6 == 0) {
+    outputSize = output.inferDims.d[0] / 6;
+  } else {
+    std::cerr << "ERROR: Unexpected output dims for YOLO parser" << std::endl;
+    return false;
+  }
   
   // REALITY CHECK: DeepStream batch processing is for multiple video streams
   // TRUE frame tiling requires either:
@@ -121,10 +147,13 @@ NvDsInferParseCustomYolo(std::vector<NvDsInferLayerInfo> const& outputLayersInfo
   // The batch-size=8 config was intended for tiling but DeepStream doesn't work that way
   
   // STANDARD MODE: Process detections from single frame
-  std::vector<NvDsInferParseObjectInfo> outObjs = decodeTensorYolo((const float*) (output.buffer), outputSize,
-      networkInfo.width, networkInfo.height, detectionParams.perClassPreclusterThreshold);
-
-  objects.insert(objects.end(), outObjs.begin(), outObjs.end());
+  const float* base = static_cast<const float*>(output.buffer);
+  for (uint b = 0; b < batch; ++b) {
+    const float* batchPtr = base + (b * outputSize * 6);
+    std::vector<NvDsInferParseObjectInfo> outObjs = decodeTensorYolo(batchPtr, outputSize,
+        networkInfo.width, networkInfo.height, detectionParams.perClassPreclusterThreshold);
+    objects.insert(objects.end(), outObjs.begin(), outObjs.end());
+  }
 
   objectList = objects;
 
